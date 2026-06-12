@@ -35,42 +35,18 @@ unsetopt beep
 HISTFILE=~/.histfile
 HISTSIZE=1000000
 SAVEHIST=500000
-# 历史记录优化选项
-setopt INC_APPEND_HISTORY        # 增量追加历史，不覆盖
-setopt HIST_IGNORE_DUPS          # 连续重复命令只存一条
-setopt EXTENDED_HISTORY          # 历史记录带时间戳
-setopt AUTO_PUSHD                # cd自动压入目录栈，cd - 快速回退
-setopt PUSHD_IGNORE_DUPS         # 目录栈去重
-setopt HIST_IGNORE_SPACE         # 命令前空格不写入历史
-setopt HIST_FIND_NO_DUPS         # 历史搜索自动跳过重复项
-setopt HIST_NO_STORE             # !cmd 调用不写入历史文件
-setopt SHARE_HISTORY             # 多终端窗口实时共享历史
-setopt NO_BG_NICE                # 后台进程不降低优先级
-setopt NO_HUP                    # 关闭终端不杀死后台任务
-
-# 补全全局视觉配置
-COMPLETION_WAITING_DOTS="true"
-ENABLE_CORRECTION="true"
 # 补全下拉菜单、分组、文件色彩美化
 zstyle ':completion:*' menu select
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
 
-# ==============================================================================
-# Zinit 核心依赖 Annex（二进制下载/补丁/监控必备，优先加载）
-# ==============================================================================
-zinit light-mode for \
-    zdharma-continuum/z-a-patch-dl \
-    zdharma-continuum/z-a-bin-gem-node \
-    zdharma-continuum/zinit-annex-as-monitor \
-    zdharma-continuum/zinit-annex-rust
-
-# ==============================================================================
-# OMZ 基础库加载
-# key-bindings 必须同步加载，其余基础库后台延迟0秒加载
-# ==============================================================================
+# 补全等待时显示一些点
+COMPLETION_WAITING_DOTS="true"
+# 开启错误自动提示
+ENABLE_CORRECTION="true"
+# oh-my-zsh中常用的插件
+# key binding是通用的基础，不适合延迟加载
 zinit lucid for OMZ::lib/key-bindings.zsh
-
 zinit wait lucid for \
     OMZ::lib/git.zsh \
     OMZ::lib/clipboard.zsh \
@@ -81,86 +57,69 @@ zinit wait lucid for \
     OMZ::plugins/git/git.plugin.zsh \
     OMZ::plugins/git-extras/git-extras.plugin.zsh
 
-# ==============================================================================
-# 核心增强插件 wait=0 后台加载（语法高亮/自动提示/括号配对）
-# 修复：移除重复加载 zsh-completions，删除无效乱码unicode快捷键
-# ==============================================================================
-# 第三方补全库 阻塞式加载，保证补全稳定
-zinit wait lucid atload="zicompinit; zicdreplay" blockf for \
+# 一些补全
+zinit wait lucid atload"zicompinit; zicdreplay" blockf for \
     zsh-users/zsh-completions
 
-# 语法高亮 + 命令自动提示
+# 用于优化下载的zinit插件
+zinit light-mode for \
+    zdharma-continuum/z-a-patch-dl \
+    zdharma-continuum/z-a-bin-gem-node
+
+zinit wait"1" lucid as="completion" for \
+    https://github.com/alacritty/alacritty/blob/master/extra/completions/_alacritty
+
+
+# fast-syntax-highlighting 快速可靠的shell高亮
+#     出于性能考虑，关闭了git的提示
+# zsh-completions 一些自动补全
+# zsh-autosuggestions fish一样的历史记录提示
+#     配置了super+l / ctrl+l / ctrl+j作为选中的快捷键
 zinit wait"0" lucid for \
  atinit"ZINIT[COMPINIT_OPTS]=-C; zicompinit; zicdreplay" \
  atload"FAST_HIGHLIGHT[chroma-git]=0" \
     zdharma/fast-syntax-highlighting \
- atload"_zsh_autosuggest_start;bindkey \"^L\" autosuggest-accept; bindkey \"^J\" autosuggest-accept" \
+ blockf \
+    zsh-users/zsh-completions \
+ atload"_zsh_autosuggest_start;bindkey \"גּ \" autosuggest-accept; bindkey \"¬\" autosuggest-accept;bindkey \"^L\" autosuggest-accept; bindkey \"^J\" autosuggest-accept;bindkey \"גּl\" autosuggest-accept " \
     zsh-users/zsh-autosuggestions
 
-# 自动括号配对、行内编辑增强
-zinit wait="0" lucid light-mode for \
-    hlissner/zsh-autopair \
-    hchbaw/zce.zsh
-
-# ==============================================================================
-# 工具类插件 wait=1 延迟加载
-# ==============================================================================
-# alacritty 终端补全
-zinit wait"1" lucid as="completion" for \
-    https://github.com/alacritty/alacritty/blob/master/extra/completions/_alacritty
-
-# forgit 交互式Git工具
+# fzf + git
 zinit wait"1" lucid for \
  atinit"forgit_ignore='fgi'" \
     wfxr/forgit
 
-# fzf 模糊搜索整套生态（合并分散三段，统一加载）
-zinit wait"1" lucid pack"bgn-binary" for \
-    junegunn/fzf \
-    https://github.com/junegunn/fzf/blob/master/shell/key-bindings.zsh \
-    https://github.com/junegunn/fzf/blob/master/shell/completion.zsh
+# fzf使用
+zinit wait"1" pack"bgn-binary" for fzf
+zinit wait"2" lucid for https://github.com/junegunn/fzf/blob/master/shell/key-bindings.zsh
+zinit ice as="completion"
+zinit snippet https://github.com/junegunn/fzf/blob/master/shell/completion.zsh
 
-# sharkdp/fd
-zinit ice as"command" from"gh-r" mv"fd*/fd -> fd" pick"fd"
-zinit light sharkdp/fd
-# sharkdp/bat
-zinit ice as"command" from"gh-r" mv"bat*/bat -> bat" pick"bat"
-zinit light sharkdp/bat
-# ogham/exa, replacement for ls
-# zinit ice wait"2" lucid from"gh-r" as"program" mv"bin/exa* -> exa"
-zinit ice as"command" from"gh-r" mv"exa* -> exa" pick"bin/exa"
-zinit light eza-community/eza
-# BurntSushi/ripgrep
-zinit ice from"gh-r" as"program" mv"ripgrep* -> ripgrep" pick"ripgrep/rg"
-zinit light BurntSushi/ripgrep 
-# junegunn/fzf-bin
-zinit ice from"gh-r" as"program"
-zinit light junegunn/fzf
-# b4b4r07/httpstat
-zinit ice as"program" mv"httpstat.sh -> httpstat" \
-    pick"httpstat" atpull'!git reset --hard'
-zinit light b4b4r07/httpstat
-#sharkdp/hyperfine 命令行基准测试工具
-zinit ice as"command" from"gh-r" mv"hyperfine*/hyperfine -> hyperfine" pick"sharkdp/hyperfine"
-zinit light sharkdp/hyperfine
-#chmln/sd sed 查找和替换
-zinit ice as"command" from"gh-r" mv"sd* -> sd" pick"sd"
-zinit light chmln/sd
-#dandavison/delta git diff
-zinit ice as"command" from"gh-r" mv"delta* -> delta" pick"delta"
-zinit light dandavison/delta
-# ogham/dog dns
-zinit ice as"command" from"gh-r" mv"dog* -> dog" pick"bin/dog"
-zinit light ogham/dog
-# knqyf263/pet 命令描述,按描述查找
-zinit ice as"command" from"gh-r" pick"pet"
-zinit light knqyf263/pet
-
-# ==============================================================================
-# Powerlevel10k 主题（放到所有插件最后，避免色彩冲突）
-# ==============================================================================
+# 可能是最好的主题提示，在zsh下有极高的性能
 zinit ice depth=1
 zinit light romkatv/powerlevel10k
+#历史纪录条目数量
+export HISTSIZE=1000000
+#注销后保存的历史纪录条目数量
+export SAVEHIST=500000
+#以附加的方式写入历史纪录
+setopt INC_APPEND_HISTORY
+#如果连续输入的命令相同，历史纪录中只保留一个
+setopt HIST_IGNORE_DUPS
+#为历史纪录中的命令添加时间戳
+setopt EXTENDED_HISTORY
+#启用 cd 命令的历史纪录，cd -[TAB]进入历史路径
+setopt AUTO_PUSHD
+#相同的历史路径只保留一个
+setopt PUSHD_IGNORE_DUPS
+#在命令前添加空格，不将此命令添加到纪录文件中
+setopt HIST_IGNORE_SPACE
+
+alias xdev="ssh congluwen@10.37.114.164"
+alias emacs-cli="$EDITOR"
+alias ckinit="kinit -k -t ~/congluwen.keytab congluwen@BYTEDANCE.COM"
+
+
 # 加载p10k自定义配置
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
@@ -178,10 +137,7 @@ fi
 # ==============================================================================
 # 内置别名、自定义函数（简易版，复杂配置建议拆分到 ~/.config 下）
 # ==============================================================================
-# 快捷SSH、编辑器、krb认证别名
-
-
-# Git内部辅助函数，解析git别名真实底层命令
+# __git_aliased_command requires 1 argument
 __git_aliased_command ()
 {
         local word cmdline=$(__git config --get "alias.$1")
@@ -204,8 +160,8 @@ __git_aliased_command ()
                         return
                 esac
         done
-}
-
+		}
+	       
 # 代理开关函数：修复兼容性、增加端口数字校验，适配无ip命令环境
 function proxy() {
     local PORT="${1:-7897}"
