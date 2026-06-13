@@ -91,7 +91,104 @@ stow_sync() {
 # 用法：stow_update
 stow_update() {
     _check_stow || return 1
+    local pkg="$1"
+    if [[ -z "$pkg" ]]; then
+        echo "❌ 用法：stow_install <package_name>"
+        return 1
+    fi
+    if [[ ! -d "${DOTFILES_DIR}/${pkg}" ]]; then
+        echo "❌ 包不存在：${DOTFILES_DIR}/${pkg}"
+        return 1
+    fi
     echo "🔄 更新所有 Stow 包..."
-    cd "${DOTFILES_DIR}" && stow -v -R *
+    cd "${DOTFILES_DIR}" && stow -v -R "${pkg}"
     echo "✅ 所有包已刷新"
+}
+
+# 链接/更新 Emacs 配置到 ~/.emacs.d/
+# 用法：stow_emacs [install|update]（默认：install）
+stow_emacs() {
+    local mode="${1:-install}"  # 默认模式为 install
+    local DOTFILES_DIR="${HOME}/dotfiles"
+    local EMACS_TARGET="${HOME}/.emacs.d"
+    local BACKUP_DIR="${EMACS_TARGET}.bak_$(date +%Y%m%d_%H%M%S)"
+
+    # 参数合法性检查
+    if [[ "$mode" != "install" && "$mode" != "update" ]]; then
+        echo "❌ 用法：stow_emacs [install|update]"
+        echo "  默认：install（首次安装）"
+        echo "  update：更新现有配置（重新链接）"
+        return 1
+    fi
+
+    # 1. 检查 dotfiles 根目录
+    if [[ ! -d "$DOTFILES_DIR" ]]; then
+        echo "❌ Dotfiles 目录不存在: $DOTFILES_DIR"
+        return 1
+    fi
+
+    # 2. 检查 Emacs 配置包
+    if [[ ! -d "$DOTFILES_DIR/emacs" ]]; then
+        echo "❌ Emacs 配置包不存在: $DOTFILES_DIR/emacs"
+        echo "请确保目录结构为："
+        echo "  $DOTFILES_DIR/emacs/"
+        echo "  ├── init.el"
+        echo "  ├── early-init.el"
+        echo "  ├── init-mini.el"
+        echo "  └── config/"
+        return 1
+    fi
+
+    # --------------------------
+    # Install 模式（首次安装）
+    # --------------------------
+    if [[ "$mode" == "install" ]]; then
+        # 3. 创建目标目录（若不存在）
+        if [[ ! -d "$EMACS_TARGET" ]]; then
+            echo "📁 创建目标目录: $EMACS_TARGET"
+            mkdir -p "$EMACS_TARGET"
+        else
+            # 4. 备份现有配置（避免覆盖）
+            echo "📦 备份现有配置到: $BACKUP_DIR"
+            mkdir -p "$BACKUP_DIR"
+
+	    mv "${EMACS_TARGET}/*" "${BACKUP_DIR}/"
+        fi
+
+        # 5. 执行 Stow 链接
+        echo "🔗 开始安装 Emacs 配置..."
+        cd "$DOTFILES_DIR" || return 1
+        if stow -v -t "$EMACS_TARGET" emacs; then
+            echo "✅ Emacs 配置安装成功！"
+            echo "💡 验证: ls -l $EMACS_TARGET"
+        else
+            echo "❌ Stow 链接失败，请检查错误信息。"
+            return 1
+        fi
+
+    # --------------------------
+    # Update 模式（更新配置）
+    # --------------------------
+    elif [[ "$mode" == "update" ]]; then
+        echo "🔄 更新 Emacs 配置（重新链接）..."
+        cd "$DOTFILES_DIR" || return 1
+        # 使用 -R（restow）重新打包：先卸载旧链接，再创建新链接
+        if stow -v -R -t "$EMACS_TARGET" emacs; then
+            echo "✅ Emacs 配置更新成功！"
+            echo "💡 验证: ls -l $EMACS_TARGET"
+        else
+            echo "❌ Stow 更新失败，请检查错误信息。"
+            return 1
+        fi
+    fi
+}
+
+stow_install_all() {
+    stow_install zsh
+    stow_emacs
+}
+
+stow_update_all() {
+    stow_update zsh
+    stow_emacs update
 }

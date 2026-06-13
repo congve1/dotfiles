@@ -31,15 +31,6 @@ bindkey -e
 setopt extendedglob nomatch notify
 unsetopt beep
 
-# 超大容量历史记录配置（全局唯一，删除上方重复定义）
-HISTFILE=~/.histfile
-HISTSIZE=1000000
-SAVEHIST=500000
-# 补全下拉菜单、分组、文件色彩美化
-zstyle ':completion:*' menu select
-zstyle ':completion:*' group-name ''
-zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
-
 # 补全等待时显示一些点
 COMPLETION_WAITING_DOTS="true"
 # 开启错误自动提示
@@ -64,7 +55,9 @@ zinit wait lucid atload"zicompinit; zicdreplay" blockf for \
 # 用于优化下载的zinit插件
 zinit light-mode for \
     zdharma-continuum/z-a-patch-dl \
-    zdharma-continuum/z-a-bin-gem-node
+    zdharma-continuum/z-a-bin-gem-node \
+    zdharma-continuum/zinit-annex-as-monitor \
+    zdharma-continuum/zinit-annex-rust
 
 zinit wait"1" lucid as="completion" for \
     https://github.com/alacritty/alacritty/blob/master/extra/completions/_alacritty
@@ -78,30 +71,54 @@ zinit wait"1" lucid as="completion" for \
 zinit wait"0" lucid for \
  atinit"ZINIT[COMPINIT_OPTS]=-C; zicompinit; zicdreplay" \
  atload"FAST_HIGHLIGHT[chroma-git]=0" \
-    zdharma/fast-syntax-highlighting \
+    zdharma-continuum/fast-syntax-highlighting \
  blockf \
     zsh-users/zsh-completions \
  atload"_zsh_autosuggest_start;bindkey \"גּ \" autosuggest-accept; bindkey \"¬\" autosuggest-accept;bindkey \"^L\" autosuggest-accept; bindkey \"^J\" autosuggest-accept;bindkey \"גּl\" autosuggest-accept " \
     zsh-users/zsh-autosuggestions
 
-# fzf + git
-zinit wait"1" lucid for \
- atinit"forgit_ignore='fgi'" \
-    wfxr/forgit
+# forgit git交互式工具
+zinit wait"1" lucid  for \
+      atinit"forgit_ignore='fgi'" \
+      wfxr/forgit \
+      hlissner/zsh-autopair
 
 # fzf使用
-zinit wait"1" pack"bgn-binary" for fzf
-zinit wait"2" lucid for https://github.com/junegunn/fzf/blob/master/shell/key-bindings.zsh
-zinit ice as="completion"
-zinit snippet https://github.com/junegunn/fzf/blob/master/shell/completion.zsh
+zinit wait"1" lucid for \
+    junegunn/fzf \
+    as"completion" \
+    https://github.com/junegunn/fzf/blob/master/shell/completion.zsh \
+    https://github.com/junegunn/fzf/blob/master/shell/key-bindings.zsh \
+    Aloxaf/fzf-tab
+
+#fzf-tab 配置
+# disable sort when completing `git checkout`
+zstyle ':completion:*:git-checkout:*' sort false
+# set descriptions format to enable group support
+# NOTE: don't use escape sequences (like '%F{red}%d%f') here, fzf-tab will ignore them
+zstyle ':completion:*:descriptions' format '[%d]'
+# set list-colors to enable filename colorizing
+zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+# force zsh not to show completion menu, which allows fzf-tab to capture the unambiguous prefix
+zstyle ':completion:*' menu no
+# preview directory's content with eza when completing cd
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
+# custom fzf flags
+# NOTE: fzf-tab does not follow FZF_DEFAULT_OPTS by default
+zstyle ':fzf-tab:*' fzf-flags --color=fg:1,fg+:2 --bind=tab:accept
+# To make fzf-tab follow FZF_DEFAULT_OPTS.
+# NOTE: This may lead to unexpected behavior since some flags break this plugin. See Aloxaf/fzf-tab#455.
+zstyle ':fzf-tab:*' use-fzf-default-opts yes
+# switch group using `<` and `>`
+zstyle ':fzf-tab:*' switch-group '<' '>'
 
 # 可能是最好的主题提示，在zsh下有极高的性能
 zinit ice depth=1
 zinit light romkatv/powerlevel10k
 #历史纪录条目数量
-export HISTSIZE=1000000
+HISTSIZE=1000000
 #注销后保存的历史纪录条目数量
-export SAVEHIST=500000
+SAVEHIST=500000
 #以附加的方式写入历史纪录
 setopt INC_APPEND_HISTORY
 #如果连续输入的命令相同，历史纪录中只保留一个
@@ -115,10 +132,7 @@ setopt PUSHD_IGNORE_DUPS
 #在命令前添加空格，不将此命令添加到纪录文件中
 setopt HIST_IGNORE_SPACE
 
-alias xdev="ssh congluwen@10.37.114.164"
 alias emacs-cli="$EDITOR"
-alias ckinit="kinit -k -t ~/congluwen.keytab congluwen@BYTEDANCE.COM"
-
 
 # 加载p10k自定义配置
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
@@ -200,4 +214,4 @@ function proxy() {
     echo "💡 测试: curl -I --proxy \$http_proxy https://www.baidu.com"
 }
 
-
+source ${HOME}/.zsh_funcs/compile_emacs.zsh
