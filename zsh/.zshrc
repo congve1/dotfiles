@@ -131,7 +131,7 @@ setopt AUTO_PUSHD
 setopt PUSHD_IGNORE_DUPS
 #在命令前添加空格，不将此命令添加到纪录文件中
 setopt HIST_IGNORE_SPACE
-
+export EDITOR="emacs -Q -nw -l ${HOME}/.emacs.d/init-mini.el"
 alias emacs-cli="$EDITOR"
 
 # 加载p10k自定义配置
