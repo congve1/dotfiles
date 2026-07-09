@@ -12,6 +12,10 @@
 
 (setq load-prefer-newer t)
 (setq package-enable-at-startup nil)
+;; 暂存 file-name-handler-alist 并在启动期间置空，减少启动期文件查找开销。
+;; 在 init.el 的 emacs-startup-hook 中恢复（见 GC 配置部分）。
+(defvar clw/init-file-name-handler-alist file-name-handler-alist)
+(setq file-name-handler-alist nil)
 ;; `use-package' is builtin since 29.
 ;; It must be set before loading `use-package'.
 (setq use-package-enable-imenu-support t)
