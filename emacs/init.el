@@ -347,6 +347,10 @@ If in WSL, try to get gateway via system commands."
 (setopt line-number-display-limit
         (* 1024 1024))
 ;;(setq line-number-display-limit-width 1000)
+;; 防止 gutter 宽度随可见最大行号动态变化导致的抖动：
+;; width-start=t 进入 buffer 时按总行数预分配宽度；grow-only=t 只增不减
+(setopt display-line-numbers-width-start t)
+(setopt display-line-numbers-grow-only t)
 (add-hook 'prog-mode-hook 'display-line-numbers-mode)
 ;;@@HL-LINE-MODE 高亮当前行
 (add-hook 'prog-mode-hook 'hl-line-mode)
@@ -1089,7 +1093,7 @@ Lisp function does not specify a special indentation."
 (setopt package-selected-packages
         '(;; 安装的包列表
           markdown-mode ; 提供 emacs 中的 markdown 支持
-          cnfonts ; 中英文字体对其，通过 `cnfonts-edit-profile' 进行设定
+          ;;cnfonts ; 中英文字体对其，通过 `cnfonts-edit-profile' 进行设定
           winum ; 快速的窗口间跳转
           avy ; 快速跳转（M-j 输入字符序列跳转）
           pyim ; 拼音输入法
@@ -1171,7 +1175,9 @@ Run after changing `package-selected-packages' or `package-vc-selected-packages'
           (yynt :url "https://github.com/include-yy/yynt")
           (persistent-cached-load-filter
            :url "https://github.com/include-yy/persistent-cached-load-filter")
-          ))
+          (project-x :url "https://github.com/vmargb/project-x")
+          )
+        )
 
 (when (clw/package-missing-p)
   (clw/install-packages))
@@ -1189,25 +1195,26 @@ Run after changing `package-selected-packages' or `package-vc-selected-packages'
   :defer t
   :hook after-init
   )
-                                        ;@@MARKDOWN-MODE
+;;@@ MARKDOWN-MODE
 (use-package markdown-mode
   :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
 ;;@@ CNFONTS
-(use-package cnfonts
-  :defer t
-  :hook after-init
-  :init
-  (setopt cnfonts-personal-fontnames
-          '(;; English
-	    ("Maple Mono NF CN" "Noto Sans Mono" "Noto Sans" "Noto Sans Mono CJK SC" "Roboto Mono")
-	    ;; Chinese
-	    ("Maple Mono NF CN")
-	    ;; EXT-B
-	    ()
-	    ;; Symbol
-	    ()
-	    ;; Decorate
-	    ())))
+;; 目前感觉没啥用，先注释掉
+;; (use-package cnfonts
+;;   :defer t
+;;   :hook after-init
+;;   :init
+;;   (setopt cnfonts-personal-fontnames
+;;           '(;; English
+;; 	    ("Maple Mono NF CN" "Noto Sans Mono" "Noto Sans" "Noto Sans Mono CJK SC" "Roboto Mono")
+;; 	    ;; Chinese
+;; 	    ("Maple Mono NF CN")
+;; 	    ;; EXT-B
+;; 	    ()
+;; 	    ;; Symbol
+;; 	    ()
+;; 	    ;; Decorate
+;; 	    ())))
 ;;@@FIND-FILE-IN-PROJECT 方便的项目内文件搜索
 ;;te 设置 ffip 在 Windows 下的相关选项
 ;; 在 Windows 上需要设定 `ffip-find-executable' 为 find
@@ -1602,10 +1609,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
                              avy-all-windows))
           (avy-single-candidate-jump nil))
       (avy-with avy-goto-char-timer
-        (setq avy--old-cands (avy--read-candidates
-                              (lambda (str) (clw/avy-replace-syntax-class
-                                             (regexp-quote str)))))
-        (avy-process avy--old-cands))))
+                (setq avy--old-cands (avy--read-candidates
+                                      (lambda (str) (clw/avy-replace-syntax-class
+                                                     (regexp-quote str)))))
+                (avy-process avy--old-cands))))
 
   :bind (("C-M-'"   . avy-resume)
          ("C-'"     . clw/avy-goto-char-this-window)
@@ -1918,6 +1925,16 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@ highlight-quoted
 (use-package highlight-quoted
   :hook (emacs-lisp-mode . highlight-quoted-mode))
+;;@@ project-x
+(use-package project-x
+  :after project
+  :config
+  ;; auto-save project state after 5 seconds of idle time
+  (setq project-x-auto-save-delay 5) ; nil to disable autosave
+  ;; use the custom prompter that shows session labels (optional)
+  (setq project-prompter #'project-x--project-prompt)
+  (project-x-mode 1)
+  )
 ;;@@P-SEARCH 检索工具
 (use-package p-search
   :defer t
