@@ -112,6 +112,9 @@
 ;;@@ 启动时不显示 GNU Emacs startup 页面
 (setopt inhibit-startup-screen t)
 (setopt initial-scratch-message (format ";;Emacs %s" emacs-version))
+;; Emacs 32 master 中 display-startup-echo-area-message 移至 C 层 subr，
+;; inhibit-startup-echo-area-message 变量已失效；用 advice 覆盖让其静默。
+(advice-add 'display-startup-echo-area-message :override #'ignore)
 ;;@@ 关闭 C-g, 边界移动命令响铃
 (setopt ring-bell-function 'ignore)
 
@@ -131,7 +134,7 @@
 (setopt completions-header-format nil)  ; 补全 buffer 中不显示汇总信息
 (setopt completions-max-height 20)      ; 补全 buffer 限高为 20 行
 (setopt completion-auto-select nil)     ; 触发补全时不移动焦点到补全 buffer
-(setopt completion-styles '(flex))
+;; completion-styles 由下方 orderless 配置统一设定为 '(orderless basic)
 ;; 也许可以考虑试试 Protesilaos Stavrou 的时尚小垃圾 -- mct.el
 ;; https://protesilaos.com/emacs/mct
 ;;@@ 总是使用 y-or-n-p，可以少打字
@@ -369,7 +372,9 @@ If in WSL, try to get gateway via system commands."
   :custom (compilation-scroll-output 'first-error))
 ;;@@ eshell
 (use-package eshell
-  :custom (eshell-scroll-show-maximum-output nil))
+  :defer t
+  :config
+  (setopt eshell-scroll-show-maximum-output nil))
 ;;@@UNIQUIFY 路径名显示唯一化
 (setopt uniquify-buffer-name-style 'reverse
         uniquify-separator " ← "
@@ -579,89 +584,78 @@ If in WSL, try to get gateway via system commands."
   :hook ((org-mode . visual-line-mode)
          (org-mode . clw/org-mode-setup)
          (org-mode . clw/set-completion-preview))
-  :custom
-  ;; 目录与文件
-  (org-directory "~/org/")
-  (org-default-notes-file (expand-file-name "inbox.org" org-directory))
-  (org-agenda-files (list org-directory))
-  ;; 显示与编辑
-  (org-startup-indented t)
-  (org-startup-truncated nil)
-  (org-startup-folded 'content)
-  (org-image-actual-width 400)
-  (org-tags-column 0)
-  (org-hide-emphasis-markers t)         ; 配 org-appear 光标进入自动展开
-  (org-pretty-entities t)               ; \alpha 显示为 α
-  (org-pretty-entities-include-sub-superscripts t)
-  (org-use-sub-superscripts '{})
-  (org-fontify-quote-and-verse-blocks t)
-  (org-fontify-whole-heading-line t)
-  (org-hide-leading-stars t)
-  (org-ellipsis (if (char-displayable-p ?⏷) "  ⏷" "  ▾"))
-  ;; 编辑安全
-  (org-catch-invisible-edits 'smart)
-  (org-special-ctrl-a/e t)
-  (org-special-ctrl-k t)
-  (org-M-RET-may-split-line '((headline) (default . nil)))
-  (org-insert-heading-respect-content t)
-  (org-return-follows-link t)
-  ;; 日志
-  (org-log-done 'time)
-  (org-log-into-drawer t)
-  (org-log-redeadline 'note)
-  (org-log-reschedule 'note)
-  ;; 标签
-  (org-use-fast-todo-selection 'expert)
-  (org-fast-tag-selection-single-key 'expert)
-  ;; 元素缓存（性能）
-  (org-element-cache-persistent nil)
-  ;; 导出
-  (org-export-dispatch-use-expert-ui t)
-  (org-export-coding-system 'utf-8)
-  (org-export-with-smart-quotes t)
-  (org-html-validation-link nil)
-  (org-export-kill-product-buffer-when-displayed t)
-  ;; babel
-  (org-confirm-babel-evaluate nil)
-  (org-src-fontify-natively t)
-  (org-src-tab-acts-natively t)
-  (org-src-preserve-indentation t)
-  (org-src-window-setup 'current-window)
-  ;; refile
-  (org-refile-targets '((nil :maxlevel . 3)
-                        (org-agenda-files :maxlevel . 3)))
-  (org-refile-use-outline-path 'file)
-  (org-outline-path-complete-in-steps nil)
-  (org-refile-allow-creating-parent-nodes 'confirm)
-  ;; TODO 关键字
-  (org-todo-keywords
-   '((sequence "TODO(t)" "DOING(i!)" "HOLD(h@/!)"
-               "|" "DONE(d!)" "CANCEL(c@)")))
-  (org-todo-keyword-faces
-   '(("TODO"   . (:foreground "#e45649" :weight bold))
-     ("DOING"  . (:foreground "#986801" :weight bold))
-     ("HOLD"   . (:foreground "#a626a4" :weight bold))
-     ("DONE"   . (:foreground "#50a14f" :weight bold))
-     ("CANCEL" . (:foreground "#9ca0a4" :weight bold :strike-through t))))
-  (org-priority-faces
-   '((?A . (:foreground "#e45649" :weight bold))
-     (?B . (:foreground "#986801" :weight bold))
-     (?C . (:foreground "#50a14f" :weight bold))))
-  ;; capture
-  (org-capture-templates
-   '(("t" "Todo"    entry (file "gtd.org")
-      "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
-      :clock-in t :clock-resume t)
-     ("n" "Note"    entry (file "notes.org")
-      "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
-     ("i" "Idea"    entry (file "idea.org")
-      "* %^{Title}\n:PROPERTIES:\n:CREATED: %U\n:END:\n%?\n")
-     ("j" "Journal" entry (file+olp+datetree "journal.org")
-      "* %^{Title} %?\n%U\n"
-      :clock-in t :clock-resume t)
-     ("b" "Book"    entry (file+olp+datetree "book.org")
-      "* Topic: %^{Description}  %^g %?\nAdded: %U")))
-  (org-babel-default-header-args:elisp '((:lexical . "yes")))
+  :init
+  (setq org-directory "~/org/"
+        org-default-notes-file (expand-file-name "inbox.org" org-directory)
+        org-agenda-files (list org-directory)
+        org-startup-indented t
+        org-startup-truncated nil
+        org-startup-folded 'content
+        org-image-actual-width 400
+        org-tags-column 0
+        org-hide-emphasis-markers t
+        org-pretty-entities t
+        org-pretty-entities-include-sub-superscripts t
+        org-use-sub-superscripts '{}
+        org-fontify-quote-and-verse-blocks t
+        org-fontify-whole-heading-line t
+        org-hide-leading-stars t
+        org-ellipsis (if (char-displayable-p ?⏷) "  ⏷" "  ▾")
+        org-catch-invisible-edits 'smart
+        org-special-ctrl-a/e t
+        org-special-ctrl-k t
+        org-M-RET-may-split-line '((headline) (default . nil))
+        org-insert-heading-respect-content t
+        org-return-follows-link t
+        org-log-done 'time
+        org-log-into-drawer t
+        org-log-redeadline 'note
+        org-log-reschedule 'note
+        org-use-fast-todo-selection 'expert
+        org-fast-tag-selection-single-key 'expert
+        org-element-cache-persistent nil
+        org-export-dispatch-use-expert-ui t
+        org-export-coding-system 'utf-8
+        org-export-with-smart-quotes t
+        org-html-validation-link nil
+        org-export-kill-product-buffer-when-displayed t
+        org-confirm-babel-evaluate nil
+        org-src-fontify-natively t
+        org-src-tab-acts-natively t
+        org-src-preserve-indentation t
+        org-src-window-setup 'current-window
+        org-refile-targets '((nil :maxlevel . 3)
+                             (org-agenda-files :maxlevel . 3))
+        org-refile-use-outline-path 'file
+        org-outline-path-complete-in-steps nil
+        org-refile-allow-creating-parent-nodes 'confirm
+        org-todo-keywords
+        '((sequence "TODO(t)" "DOING(i!)" "HOLD(h@/!)"
+                    "|" "DONE(d!)" "CANCEL(c@)"))
+        org-todo-keyword-faces
+        '(("TODO"   . (:foreground "#e45649" :weight bold))
+          ("DOING"  . (:foreground "#986801" :weight bold))
+          ("HOLD"   . (:foreground "#a626a4" :weight bold))
+          ("DONE"   . (:foreground "#50a14f" :weight bold))
+          ("CANCEL" . (:foreground "#9ca0a4" :weight bold :strike-through t)))
+        org-priority-faces
+        '((?A . (:foreground "#e45649" :weight bold))
+          (?B . (:foreground "#986801" :weight bold))
+          (?C . (:foreground "#50a14f" :weight bold)))
+        org-capture-templates
+        '(("t" "Todo"    entry (file "gtd.org")
+           "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
+           :clock-in t :clock-resume t)
+          ("n" "Note"    entry (file "notes.org")
+           "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
+          ("i" "Idea"    entry (file "idea.org")
+           "* %^{Title}\n:PROPERTIES:\n:CREATED: %U\n:END:\n%?\n")
+          ("j" "Journal" entry (file+olp+datetree "journal.org")
+           "* %^{Title} %?\n%U\n"
+           :clock-in t :clock-resume t)
+          ("b" "Book"    entry (file+olp+datetree "book.org")
+           "* Topic: %^{Description}  %^g %?\nAdded: %U")))
+  (setq org-babel-default-header-args:elisp '((:lexical . "yes")))
   :config
   ;; 创建目录（首次使用）
   (unless (file-exists-p org-directory) (make-directory org-directory t))
@@ -707,24 +701,24 @@ If in WSL, try to get gateway via system commands."
 (use-package org-agenda
   :after org
   :hook (org-agenda-mode . hl-line-mode)
-  :custom
-  (org-agenda-window-setup 'current-window)
-  (org-agenda-restore-windows-after-quit t)
-  (org-agenda-span 'day)
-  (org-agenda-start-on-weekday nil)
-  (org-agenda-compact-blocks t)
-  (org-agenda-block-separator ?─)
-  (org-agenda-tags-column 'auto)
-  (org-agenda-time-grid
-   '((daily today require-timed)
-     (800 1000 1200 1400 1600 1800 2000)
-     " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"))
-  (org-agenda-current-time-string
-   "⭠ now ─────────────────────────────────────────────────")
-  (org-agenda-skip-scheduled-if-done t)
-  (org-agenda-skip-deadline-if-done t)
-  (org-agenda-skip-timestamp-if-done t)
-  (org-agenda-custom-commands
+  :config
+  (setq org-agenda-window-setup 'current-window
+        org-agenda-restore-windows-after-quit t
+        org-agenda-span 'day
+        org-agenda-start-on-weekday nil
+        org-agenda-compact-blocks t
+        org-agenda-block-separator ?─
+        org-agenda-tags-column 'auto
+        org-agenda-time-grid
+        '((daily today require-timed)
+          (800 1000 1200 1400 1600 1800 2000)
+          " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"))
+  (setq org-agenda-current-time-string
+        "⭠ now ─────────────────────────────────────────────────"
+        org-agenda-skip-scheduled-if-done t
+        org-agenda-skip-deadline-if-done t
+        org-agenda-skip-timestamp-if-done t)
+  (setq org-agenda-custom-commands
    '(("g" "Get Things Done (GTD)"
       ((agenda ""
                ((org-agenda-skip-function
@@ -744,28 +738,27 @@ If in WSL, try to get gateway via system commands."
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
-  :hook ((org-mode . (lambda ()
-                       (when (display-graphic-p) (org-modern-mode 1))))
-         (org-agenda-finalize . (lambda ()
-                                  (when (display-graphic-p) (org-modern-agenda)))))
-  :custom
-  (org-modern-hide-stars nil)
-  (org-modern-star 'replace)
-  (org-modern-todo t)
-  (org-modern-keyword "‣ ")
-  (org-modern-horizontal-rule t)
-  (org-modern-table t))
+  :if (display-graphic-p)
+  :hook ((org-mode . org-modern-mode)
+         (org-agenda-finalize . org-modern-agenda))
+  :config
+  (setq org-modern-hide-stars nil
+        org-modern-star 'replace
+        org-modern-todo t
+        org-modern-keyword "‣ "
+        org-modern-horizontal-rule t
+        org-modern-table t))
 
 ;;@@ORG-APPEAR 光标进入时自动展开 emphasis/link 标记
 (use-package org-appear
   :hook (org-mode . org-appear-mode)
-  :custom
-  (org-appear-autoemphasis t)
-  (org-appear-autolinks t)
-  (org-appear-autosubmarkers t)
-  (org-appear-autoentities t)
-  (org-appear-autokeywords t)
-  (org-appear-delay 0.3))
+  :config
+  (setq org-appear-autoemphasis t
+        org-appear-autolinks t
+        org-appear-autosubmarkers t
+        org-appear-autoentities t
+        org-appear-autokeywords t
+        org-appear-delay 0.3))
 
 ;;@@TOC-ORG 自动维护 :TOC: 目录，适合 README
 (use-package toc-org
@@ -909,13 +902,18 @@ If in WSL, try to get gateway via system commands."
             (prettify-symbols-mode -1)))
 ;;@@ flymake
 (use-package flymake
-  :hook (prog-mode . flymake-mode)
-  :hook (flymake-mode . (lambda ()
-                          (setq eldoc-documentation-functions
-                                (cons 'flymake-eldoc-function
-                                      (delq 'flymake-eldoc-function
-                                            eldoc-documentation-functions)))))
-  :init (setq elisp-flymake-byte-compile-load-path (cons "./" load-path)))
+  :hook ((prog-mode . clw/flymake-prog-mode)
+         (flymake-mode . clw/flymake-eldoc-setup))
+  :init
+  (setq elisp-flymake-byte-compile-load-path (cons "./" load-path))
+  (defun clw/flymake-prog-mode ()
+    (unless (string= (buffer-name) "*scratch*")
+      (flymake-mode 1)))
+  (defun clw/flymake-eldoc-setup ()
+    (setq eldoc-documentation-functions
+          (cons 'flymake-eldoc-function
+                (delq 'flymake-eldoc-function
+                      eldoc-documentation-functions)))))
 ;;@@EGLOT
 ;; 加载 eglot
 (use-package eglot
@@ -1123,8 +1121,9 @@ If in WSL, try to get gateway via system commands."
   (read-buffer-completion-ignore-case t)
   (completion-ignore-case t)
   (enable-recursive-minibuffers t)
-  (inhibit-message-regexps '("^Saving file" "^Wrote" "^Indentation setup for shell"))
-  (set-message-functions '(inhibit-message))
+   (inhibit-message-regexps (append inhibit-message-regexps
+                                   '("^Saving file" "^Wrote" "^Indentation setup for shell")))
+   (set-message-functions '(inhibit-message))
   :init (minibuffer-depth-indicate-mode))
 ;;@@ simple
 (use-package simple
@@ -1319,10 +1318,43 @@ Lisp function does not specify a special indentation."
           ))
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
-Run after changing `package-selected-packages' or `package-vc-selected-packages'."
+Run after changing `package-selected-packages' or `package-vc-selected-packages'.
+
+自动管理代理：若代理未开启，会在安装前开启并在结束后关闭；若已开启，则
+保持不动。
+
+单包用 condition-case 兜底，避免 Emacs master 上 tar-mode cl-assert
+（bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
+package-install 手动重试即可。"
   (interactive)
-  (package-install-selected-packages)
-  (package-vc-install-selected-packages))
+  (let ((proxy-was-off (not clw/proxy-enabled))
+        (failed-packages nil))
+    (when proxy-was-off
+      (message "[clw] 安装前自动开启代理...")
+      (clw/proxy-toggle))
+    (unwind-protect
+        (progn
+          (dolist (pkg package-selected-packages)
+            (unless (package-installed-p pkg)
+              (condition-case err
+                  (package-install pkg)
+                (error
+                 (push (cons pkg err) failed-packages)
+                 (message "[clw] Package %s install failed: %S" pkg err)))))
+          (condition-case err
+              (package-vc-install-selected-packages)
+            (error
+             (push (cons 'package-vc err) failed-packages)
+             (message "[clw] package-vc-install failed: %S" err)))
+          (if failed-packages
+              (message "[clw] 安装失败的包（共 %d 个）: %s"
+                       (length failed-packages)
+                       (mapconcat (lambda (p) (symbol-name (car p)))
+                                  (nreverse failed-packages) ", "))
+            (message "[clw] 所有包安装成功")))
+      (when (and proxy-was-off clw/proxy-enabled)
+        (message "[clw] 安装完成，自动关闭代理...")
+        (clw/proxy-toggle)))))
 
 (defun clw/package-missing-p ()
   "Return non-nil if any selected package is missing."
@@ -1717,7 +1749,7 @@ The current window is chosen if WIN is not specified."
                                   `((,st . ,(1+ st)) . ,win)
                                   all-buttons))))))
 
-        (when-let
+        (when-let*
             ((_ all-buttons)
              (avy-action
               (lambda (pt)
@@ -1931,6 +1963,8 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (popper-echo-mode 1))
 ;;@@ENVRC Linux 上管理开发环境
 ;; 可以执行 `envrc-allow' 和 `envrc-deny' 来开启和关闭某目录下的 .envrc
+;; 注意：envrc-global-mode 是全局 mode，必须一次性启用（放 after-init）。
+;; 不能挂到 find-file-hook——无参调用会 toggle，反复开关且每次遍历 buffer 列表。
 (use-package envrc
   :when sys/linuxp
   :defer t
@@ -1957,16 +1991,16 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :hook (prog-mode . rainbow-delimiters-mode))
 ;;@@ highlight-escape-sequences 给字符串和正则里的转义字符（如 \n、\t、\x1b）上色，让你一眼看清哪些字符是“特殊的
 (use-package highlight-escape-sequences
-  :hook (after-init . hes-mode))
+  :hook (prog-mode . hes-mode))
 ;;@@ multiple-cursors 让你同时在多个位置（光标）进行编辑
 (use-package multiple-cursors
   :bind
-  ("C-S-c C-S-c" . 'mc/edit-lines)
-  ("C->" . 'mc/mark-next-like-this)
-  ("C-<" . 'mc/mark-previous-like-this)
-  ("C-c C-<" . 'mc/mark-all-like-this)
-  ("C-\"" . 'mc/skip-to-next-like-this)
-  (:map mc/keymap ("M-N" . 'mc/insert-numbers))
+  ("C-S-c C-S-c" . mc/edit-lines)
+  ("C->" . mc/mark-next-like-this)
+  ("C-<" . mc/mark-previous-like-this)
+  ("C-c C-<" . mc/mark-all-like-this)
+  ("C-\"" . mc/skip-to-next-like-this)
+  (:map mc/keymap ("M-N" . mc/insert-numbers))
   :config
   (add-to-list 'mc/unsupported-minor-modes 'auto-save-visited-mode))
 ;;@@ move-dup 一键复制当前行 / 区域，或将行/区域向上/向下移动。
@@ -1997,7 +2031,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :config (add-to-list 'jinx-exclude-regexps '(t "\\cc")))
 ;;@@ ws-butler
 (use-package ws-butler
-  :hook (emacs-startup . ws-butler-global-mode))
+  :hook ((prog-mode text-mode conf-mode) . ws-butler-mode))
 ;;@@ diff-hl
 (use-package diff-hl
   :if (display-graphic-p)
@@ -2006,7 +2040,8 @@ This differs from Avy's goto-char-timer in how it processes parens."
          ("M-]" . diff-hl-next-hunk)
          ("M-[" . diff-hl-previous-hunk))
   :hook ((after-init . global-diff-hl-mode)
-         (dired-mode . diff-hl-dired-mode))
+         (dired-mode . diff-hl-dired-mode)
+         (vc-dir-mode . turn-on-diff-hl-mode))
   :commands diff-hl-magit-post-refresh
   :config
   (with-eval-after-load 'magit

@@ -2,7 +2,7 @@
 ;;; Commentary:
 ;;; Code:
 
-(setopt package-user-dir
+(setq package-user-dir
      (expand-file-name
       (format "elpa-%s"
               emacs-major-version)
@@ -22,6 +22,10 @@
 
 ;; Prevent unwanted runtime compilation for Emacs with native-comp
 (setq native-comp-jit-compilation nil)
+
+;; Suppress "Loading ...done" messages during startup
+(setq inhibit-message-regexps '("^Loading "))
+(setq set-message-functions '(inhibit-message))
 
 ;; Resizing the Emacs frame can be a terribly expensive part of changing the
 ;; font. By inhibiting this, we easily halve startup times with fonts that are
