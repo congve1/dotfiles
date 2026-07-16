@@ -933,17 +933,22 @@ If in WSL, try to get gateway via system commands."
 (use-package which-key
   :diminish which-key-mode
   :init
-  ;; 通过 C-h 或 ? 才显示 which-key buffer
-  ;; 如果某些命令使用了 C-h 或 ? 可能会冲突
+  ;; 通过 C-h 或 ? 立即显示 which-key buffer（不必等 idle）
   (setopt which-key-show-early-on-C-h t)
-  ;; 仅通过 C-h 触发
-  (setopt which-key-idle-delay 10000.0)
-  ;; 在随后的按键中迅速响应
+  ;; 按前缀键后 0.5s 自动弹出所有后续快捷键
+  (setopt which-key-idle-delay 0.5)
+  ;; 弹出后继续按键瞬时刷新
   (setopt which-key-idle-secondary-delay 0.05)
+  ;; 按字母排序，方便查找
+  (setopt which-key-sort-order 'which-key-key-order-alpha)
+  ;; 列间距
+  (setopt which-key-add-column-padding 1)
+  ;; 命令描述最长 40 字符，避免弹窗过宽
+  (setopt which-key-max-description-length 40)
   :config
   ;; 启动全局 which-key-mode
   (which-key-mode))
-;;@@DIRED 显示目录
+;;@@Dired显示目录
 ;; 按照数字顺序排列文件，即 1,2,...,10,11...
 ;; https://emacs.stackexchange.com/a/5650
 (setopt dired-listing-switches
