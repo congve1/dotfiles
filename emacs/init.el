@@ -429,8 +429,10 @@ If in WSL, try to get gateway via system commands."
              ("js/css/html"
               (or (mode . js-mode)
                   (mode . js-ts-mode)
+                  (mode . typescript-ts-mode)
+                  (mode . tsx-ts-mode)
                   (mode . json-ts-mode)
-                  (filename . ".+\\.\\(cjs\\|mjs\\|js\\|json\\|ts\\)")
+                  (filename . ".+\\.\\(cjs\\|mjs\\|js\\|json\\|ts\\|tsx\\)")
                   (mode . html-mode)
                   (mode . css-mode)
                   (filename . ".+\\.wgsl")
@@ -920,7 +922,9 @@ If in WSL, try to get gateway via system commands."
   :defer t
   :hook ((python-base-mode . eglot-ensure)
          (rust-ts-mode . eglot-ensure)
-         (go-ts-mode . eglot-ensure))
+         (go-ts-mode . eglot-ensure)
+         (js-base-mode . eglot-ensure)
+         (typescript-ts-base-mode . eglot-ensure))
   :bind (:map eglot-mode-map
          ("C-c l a" . eglot-code-actions)
          ("C-c l r" . eglot-rename)
@@ -1076,6 +1080,28 @@ If in WSL, try to get gateway via system commands."
                    (mapconcat (lambda (c) (symbol-name (car c))) missing ", "))
           (clw/go-install-tools)))))
   (add-hook 'go-ts-mode-hook #'clw/go-ensure-tools -90))
+
+;;@@JAVASCRIPT JavaScript 开发环境
+(use-package js
+  :defer t
+  :custom
+  ;; 缩进 2 空格（JS 社区惯例）
+  (js-indent-level 2)
+  :config
+  ;; 填充列与 prettier 默认值一致
+  (add-hook 'js-base-mode-hook
+            (lambda () (setq-local fill-column 80))))
+
+;;@@TYPESCRIPT TypeScript 开发环境
+(use-package typescript-ts-mode
+  :defer t
+  :custom
+  ;; 缩进 2 空格（TS 社区惯例）
+  (typescript-ts-indent-offset 2)
+  :config
+  ;; 填充列与 prettier 默认值一致
+  (add-hook 'typescript-ts-base-mode-hook
+            (lambda () (setq-local fill-column 80))))
 
 ;;@@DABBREV 根据 buffer 内容进行补全
 ;; tbd
@@ -2127,7 +2153,13 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (setf (alist-get 'go-ts-mode apheleia-mode-alist)
         (if (executable-find "goimports") 'goimports 'gofmt))
   (setf (alist-get 'go-mode apheleia-mode-alist)
-        (if (executable-find "goimports") 'goimports 'gofmt)))
+        (if (executable-find "goimports") 'goimports 'gofmt))
+  ;; JavaScript/TypeScript 使用 prettier 格式化
+  (setf (alist-get 'js-mode apheleia-mode-alist) 'prettier)
+  (setf (alist-get 'js-ts-mode apheleia-mode-alist) 'prettier)
+  (setf (alist-get 'typescript-ts-mode apheleia-mode-alist) 'prettier)
+  (setf (alist-get 'tsx-ts-mode apheleia-mode-alist) 'prettier)
+  (setf (alist-get 'json-ts-mode apheleia-mode-alist) 'prettier))
 ;;@@ highlight-quoted
 (use-package highlight-quoted
   :hook (emacs-lisp-mode . highlight-quoted-mode))

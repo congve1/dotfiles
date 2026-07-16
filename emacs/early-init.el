@@ -3,10 +3,10 @@
 ;;; Code:
 
 (setq package-user-dir
-     (expand-file-name
-      (format "elpa-%s"
-              emacs-major-version)
-      user-emacs-directory))
+      (expand-file-name
+       (format "elpa-%s"
+               emacs-major-version)
+       user-emacs-directory))
 
 (require 'cl-lib)
 
@@ -73,7 +73,7 @@
     (sans . "Maple Mono NF CN")
     (serif . "Maple Mono NF CN")
     (cjk . "Maple Mono NF CN")
-    (symbol . "Maple Mono NF CN")
+    (symbol . "Segoe UI Emoji")
     )
   "Fonts to use")
 (defun clw/get-font-family (key)
