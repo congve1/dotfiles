@@ -571,42 +571,205 @@ If in WSL, try to get gateway via system commands."
   :bind (("C-c l" . org-store-link)
          ("C-c a" . org-agenda)
          ("C-c c" . org-capture)
-	 ("C-\\" . clw/insert-zws))
+         ("C-\\"  . clw/insert-zws)
+         :map org-mode-map
+         ("C-c v" . visible-mode)
+         :map org-src-mode-map
+         ("C-c C-c" . org-edit-src-exit))
+  :hook ((org-mode . visual-line-mode)
+         (org-mode . clw/org-mode-setup)
+         (org-mode . clw/set-completion-preview))
+  :custom
+  ;; 目录与文件
+  (org-directory "~/org/")
+  (org-default-notes-file (expand-file-name "inbox.org" org-directory))
+  (org-agenda-files (list org-directory))
+  ;; 显示与编辑
+  (org-startup-indented t)
+  (org-startup-truncated nil)
+  (org-startup-folded 'content)
+  (org-image-actual-width 400)
+  (org-tags-column 0)
+  (org-hide-emphasis-markers t)         ; 配 org-appear 光标进入自动展开
+  (org-pretty-entities t)               ; \alpha 显示为 α
+  (org-pretty-entities-include-sub-superscripts t)
+  (org-use-sub-superscripts '{})
+  (org-fontify-quote-and-verse-blocks t)
+  (org-fontify-whole-heading-line t)
+  (org-hide-leading-stars t)
+  (org-ellipsis (if (char-displayable-p ?⏷) "  ⏷" "  ▾"))
+  ;; 编辑安全
+  (org-catch-invisible-edits 'smart)
+  (org-special-ctrl-a/e t)
+  (org-special-ctrl-k t)
+  (org-M-RET-may-split-line '((headline) (default . nil)))
+  (org-insert-heading-respect-content t)
+  (org-return-follows-link t)
+  ;; 日志
+  (org-log-done 'time)
+  (org-log-into-drawer t)
+  (org-log-redeadline 'note)
+  (org-log-reschedule 'note)
+  ;; 标签
+  (org-use-fast-todo-selection 'expert)
+  (org-fast-tag-selection-single-key 'expert)
+  ;; 元素缓存（性能）
+  (org-element-cache-persistent nil)
+  ;; 导出
+  (org-export-dispatch-use-expert-ui t)
+  (org-export-coding-system 'utf-8)
+  (org-export-with-smart-quotes t)
+  (org-html-validation-link nil)
+  (org-export-kill-product-buffer-when-displayed t)
+  ;; babel
+  (org-confirm-babel-evaluate nil)
+  (org-src-fontify-natively t)
+  (org-src-tab-acts-natively t)
+  (org-src-preserve-indentation t)
+  (org-src-window-setup 'current-window)
+  ;; refile
+  (org-refile-targets '((nil :maxlevel . 3)
+                        (org-agenda-files :maxlevel . 3)))
+  (org-refile-use-outline-path 'file)
+  (org-outline-path-complete-in-steps nil)
+  (org-refile-allow-creating-parent-nodes 'confirm)
+  ;; TODO 关键字
+  (org-todo-keywords
+   '((sequence "TODO(t)" "DOING(i!)" "HOLD(h@/!)"
+               "|" "DONE(d!)" "CANCEL(c@)")))
+  (org-todo-keyword-faces
+   '(("TODO"   . (:foreground "#e45649" :weight bold))
+     ("DOING"  . (:foreground "#986801" :weight bold))
+     ("HOLD"   . (:foreground "#a626a4" :weight bold))
+     ("DONE"   . (:foreground "#50a14f" :weight bold))
+     ("CANCEL" . (:foreground "#9ca0a4" :weight bold :strike-through t))))
+  (org-priority-faces
+   '((?A . (:foreground "#e45649" :weight bold))
+     (?B . (:foreground "#986801" :weight bold))
+     (?C . (:foreground "#50a14f" :weight bold))))
+  ;; capture
+  (org-capture-templates
+   '(("t" "Todo"    entry (file "gtd.org")
+      "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
+      :clock-in t :clock-resume t)
+     ("n" "Note"    entry (file "notes.org")
+      "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
+     ("i" "Idea"    entry (file "idea.org")
+      "* %^{Title}\n:PROPERTIES:\n:CREATED: %U\n:END:\n%?\n")
+     ("j" "Journal" entry (file+olp+datetree "journal.org")
+      "* %^{Title} %?\n%U\n"
+      :clock-in t :clock-resume t)
+     ("b" "Book"    entry (file+olp+datetree "book.org")
+      "* Topic: %^{Description}  %^g %?\nAdded: %U")))
+  (org-babel-default-header-args:elisp '((:lexical . "yes")))
   :config
-  (setopt org-tags-column 0)
-  (setopt org-startup-truncated nil)
-  (setopt org-image-actual-width 400)
-  (setopt org-element-cache-persistent nil)
-  (setopt org-export-dispatch-use-expert-ui t)
-  (setq org-babel-default-header-args:elisp '((:lexical . "yes")))
-  (add-hook 'org-mode-hook 'visual-line-mode)
-  (add-hook 'org-mode-hook
-   	    (defalias 'clw/disable-show-paren
-   	      (lambda () (show-paren-local-mode -1))))
+  ;; 创建目录（首次使用）
+  (unless (file-exists-p org-directory) (make-directory org-directory t))
+  ;; 插入零宽空格（原有功能）
   (defun clw/insert-zws () (interactive) (insert "​"))
-  ;; 启用 `completion-preview-mode'
-  ;; https://www.reddit.com/r/emacs/comments/1j0wonk/how_to_trigger_completionpreview_in_orgmode_to/
-  (add-hook
-   'org-mode-hook
-   (defun clw/set-completion-preview ()
-     (completion-preview-mode)
-     (let ((kmap (make-sparse-keymap)))
-       (keymap-set kmap "C-i" #'completion-preview-insert)
-       (keymap-set kmap "M-i" #'completion-preview-complete)
-       (keymap-set kmap "C-n" #'completion-preview-next-candidate)
-       (keymap-set kmap "C-p" #'completion-preview-prev-candidate)
-       (keymap-set kmap "SPC" #'completion-preview-insert-word)
-       (setq-local completion-preview-active-mode-map kmap))
-     (setq-local completion-preview-commands
-                 '(;; self-insert-command
-                   org-self-insert-command
-                   insert-char
-                   ;; delete-backward-char
-                   org-delete-backward-char
-                   backward-delete-char-untabify
-                   analyze-text-conversion
-                   completion-preview-complete))))
-  )
+  ;; org-mode buffer 关闭 show-paren
+  (defun clw/org-mode-setup ()
+    (make-variable-buffer-local 'show-paren-mode)
+    (show-paren-local-mode -1))
+  ;; completion-preview 集成（保留你原有实现）
+  (defun clw/set-completion-preview ()
+    (completion-preview-mode)
+    (let ((kmap (make-sparse-keymap)))
+      (keymap-set kmap "C-i" #'completion-preview-insert)
+      (keymap-set kmap "M-i" #'completion-preview-complete)
+      (keymap-set kmap "C-n" #'completion-preview-next-candidate)
+      (keymap-set kmap "C-p" #'completion-preview-prev-candidate)
+      (keymap-set kmap "SPC" #'completion-preview-insert-word)
+      (setq-local completion-preview-active-mode-map kmap))
+    (setq-local completion-preview-commands
+                '(org-self-insert-command
+                  insert-char
+                  org-delete-backward-char
+                  backward-delete-char-untabify
+                  analyze-text-conversion
+                  completion-preview-complete)))
+  ;; babel 语言按需加载
+  (org-babel-do-load-languages
+   'org-babel-load-languages
+   '((emacs-lisp . t)
+     (python     . t)
+     (shell      . t)
+     (C          . t)))
+  ;; 结构模板补充（<el<TAB> 展开为 emacs-lisp 代码块等）
+  (require 'org-tempo)
+  (dolist (tpl '(("el" . "src emacs-lisp")
+                 ("py" . "src python :results output")
+                 ("sh" . "src shell")
+                 ("cf" . "src conf")))
+    (add-to-list 'org-structure-template-alist tpl)))
+
+;;@@ORG-AGENDA agenda 视图
+(use-package org-agenda
+  :after org
+  :hook (org-agenda-mode . hl-line-mode)
+  :custom
+  (org-agenda-window-setup 'current-window)
+  (org-agenda-restore-windows-after-quit t)
+  (org-agenda-span 'day)
+  (org-agenda-start-on-weekday nil)
+  (org-agenda-compact-blocks t)
+  (org-agenda-block-separator ?─)
+  (org-agenda-tags-column 'auto)
+  (org-agenda-time-grid
+   '((daily today require-timed)
+     (800 1000 1200 1400 1600 1800 2000)
+     " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"))
+  (org-agenda-current-time-string
+   "⭠ now ─────────────────────────────────────────────────")
+  (org-agenda-skip-scheduled-if-done t)
+  (org-agenda-skip-deadline-if-done t)
+  (org-agenda-skip-timestamp-if-done t)
+  (org-agenda-custom-commands
+   '(("g" "Get Things Done (GTD)"
+      ((agenda ""
+               ((org-agenda-skip-function
+                 '(org-agenda-skip-entry-if 'deadline))
+                (org-deadline-warning-days 0)))
+       (todo "DOING"
+             ((org-agenda-overriding-header "In Progress")))
+       (agenda nil
+               ((org-agenda-entry-types '(:deadline))
+                (org-agenda-format-date "")
+                (org-deadline-warning-days 7)
+                (org-agenda-overriding-header "Deadlines (next 7 days)")))
+       (tags-todo "inbox"
+                  ((org-agenda-overriding-header "Inbox")))
+       (tags "CLOSED>=\"<today>\""
+             ((org-agenda-overriding-header "Completed today"))))))))
+
+;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
+(use-package org-modern
+  :hook ((org-mode . (lambda ()
+                       (when (display-graphic-p) (org-modern-mode 1))))
+         (org-agenda-finalize . (lambda ()
+                                  (when (display-graphic-p) (org-modern-agenda)))))
+  :custom
+  (org-modern-hide-stars nil)
+  (org-modern-star 'replace)
+  (org-modern-todo t)
+  (org-modern-keyword "‣ ")
+  (org-modern-horizontal-rule t)
+  (org-modern-table t))
+
+;;@@ORG-APPEAR 光标进入时自动展开 emphasis/link 标记
+(use-package org-appear
+  :hook (org-mode . org-appear-mode)
+  :custom
+  (org-appear-autoemphasis t)
+  (org-appear-autolinks t)
+  (org-appear-autosubmarkers t)
+  (org-appear-autoentities t)
+  (org-appear-autokeywords t)
+  (org-appear-delay 0.3))
+
+;;@@TOC-ORG 自动维护 :TOC: 目录，适合 README
+(use-package toc-org
+  :hook (org-mode . toc-org-mode))
 ;;@@CC-MODE C 系语言基础配置
 (use-package cc-mode
   :defer t
@@ -1150,6 +1313,9 @@ Lisp function does not specify a special indentation."
           jinx
           highlight-quoted
           treesit-auto
+          org-modern ; org-mode 现代化外观
+          org-appear ; 光标进入自动展开 emphasis/link 标记
+          toc-org ; 自动维护 :TOC: 目录
           ))
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
