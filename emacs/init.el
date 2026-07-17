@@ -314,6 +314,38 @@ If in WSL, try to get gateway via system commands."
 (keymap-set lisp-interaction-mode-map "C-h y" 'clw/find-symbol-at-point)
 ;;@@ 关闭 `indent-tabs-mode'
 (setopt indent-tabs-mode nil)
+;;@@ 持久前置快捷键映射
+(defun repeated-prefix-help-command ()
+  "在前缀键后按 C-h：用 which-key 展示该前缀的按键绑定，且面板常驻。
+
+复制该前缀为一张临时键映射（`overriding-terminal-local-map'）并令 KEEP-PRED=t，
+弹窗显示后该前缀保持激活，可连续按键（像一个可重复菜单）。关键在于面板要
+“常驻”：默认 `which-key--hide-popup' 挂在 `pre-command-hook' 上，会在下一个
+命令执行前把弹窗关掉（所以看起来跟 which-key 默认行为一样、面板留不住），这里
+把 `which-key-persistent-popup' 置 t 禁用它，退出时再恢复 nil。
+
+实现要点：
+- KEEP-PRED 用 t：让该前缀映射在按键期间持续保留（可重复执行命令），仅当按到
+  不在映射中的键（如 C-g）时才退出。
+- ON-EXIT 只做两件事：恢复 `which-key-persistent-popup' 为 nil、调用
+  `which-key--hide-popup' 关弹窗。绝不可用 `which-key-abort'：它内部会
+  `keyboard-quit'，而 ON-EXIT 跑在 `clear-transient-map' 这个 pre-command-hook
+  里，在其中 quit 会报 “Error in pre-command-hook (clear-transient-map): (quit)”。
+  C-g 本身会落到 `keyboard-quit'，无需在此再 quit。
+- 不需要 `[remap keyboard-quit]'：C-g 不在映射中，会照常触发 ON-EXIT 后再落到
+  `keyboard-quit'。"
+  (interactive)
+  (when-let* ((keys (this-command-keys-vector))
+              (prefix (seq-take keys (1- (length keys))))
+              (orig-keymap (key-binding prefix 'accept-default)))
+    (let ((keymap (copy-keymap orig-keymap)))
+      (setq which-key-persistent-popup t)        ; 让面板常驻：禁用 which-key 自动隐藏
+      (set-transient-map keymap t
+        (lambda ()
+          (setq which-key-persistent-popup nil)  ; 退出时恢复自动隐藏
+          (which-key--hide-popup)))              ; 并关闭面板（勿用 which-key-abort，会 quit）
+      (which-key--create-buffer-and-show nil keymap))))
+
 ;;@@ 设置窗口整体透明度为 0.65
 ;; 当前 Windows 还未实现背景透明 [2025-09-15]
 (defun clw/toggle-alpha ()
@@ -721,22 +753,22 @@ If in WSL, try to get gateway via system commands."
         org-agenda-skip-deadline-if-done t
         org-agenda-skip-timestamp-if-done t)
   (setq org-agenda-custom-commands
-   '(("g" "Get Things Done (GTD)"
-      ((agenda ""
-               ((org-agenda-skip-function
-                 '(org-agenda-skip-entry-if 'deadline))
-                (org-deadline-warning-days 0)))
-       (todo "DOING"
-             ((org-agenda-overriding-header "In Progress")))
-       (agenda nil
-               ((org-agenda-entry-types '(:deadline))
-                (org-agenda-format-date "")
-                (org-deadline-warning-days 7)
-                (org-agenda-overriding-header "Deadlines (next 7 days)")))
-       (tags-todo "inbox"
-                  ((org-agenda-overriding-header "Inbox")))
-       (tags "CLOSED>=\"<today>\""
-             ((org-agenda-overriding-header "Completed today"))))))))
+        '(("g" "Get Things Done (GTD)"
+           ((agenda ""
+                    ((org-agenda-skip-function
+                      '(org-agenda-skip-entry-if 'deadline))
+                     (org-deadline-warning-days 0)))
+            (todo "DOING"
+                  ((org-agenda-overriding-header "In Progress")))
+            (agenda nil
+                    ((org-agenda-entry-types '(:deadline))
+                     (org-agenda-format-date "")
+                     (org-deadline-warning-days 7)
+                     (org-agenda-overriding-header "Deadlines (next 7 days)")))
+            (tags-todo "inbox"
+                       ((org-agenda-overriding-header "Inbox")))
+            (tags "CLOSED>=\"<today>\""
+                  ((org-agenda-overriding-header "Completed today"))))))))
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
@@ -1134,7 +1166,8 @@ If in WSL, try to get gateway via system commands."
   (setopt which-key-max-description-length 40)
   :config
   ;; 启动全局 which-key-mode
-  (which-key-mode))
+  (which-key-mode)
+  (setq prefix-help-command #'repeated-prefix-help-command))
 ;;@@Dired显示目录
 ;; 按照数字顺序排列文件，即 1,2,...,10,11...
 ;; https://emacs.stackexchange.com/a/5650
@@ -1147,9 +1180,9 @@ If in WSL, try to get gateway via system commands."
   (read-buffer-completion-ignore-case t)
   (completion-ignore-case t)
   (enable-recursive-minibuffers t)
-   (inhibit-message-regexps (append inhibit-message-regexps
+  (inhibit-message-regexps (append inhibit-message-regexps
                                    '("^Saving file" "^Wrote" "^Indentation setup for shell")))
-   (set-message-functions '(inhibit-message))
+  (set-message-functions '(inhibit-message))
   :init (minibuffer-depth-indicate-mode))
 ;;@@ simple
 (use-package simple
@@ -1934,26 +1967,170 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@ embark
 (use-package embark
   :bind
-  ("C-." . embark-act)
-  ("M-." . embark-dwim)
-  ("C-h b" . embark-bindings)
+  ("C-." . embark-act)               ; 对光标处对象执行动作（弹出动作菜单）
+  ("M-." . embark-dwim)              ; 直接执行默认动作（不弹菜单）
+  ("C-h b" . embark-bindings)        ; 查看按键绑定（替代 describe-bindings）
   ("C-h B" . embark-bindings-at-point)
-  ("M-n" . embark-next-symbol)
+  ("M-n" . embark-next-symbol)       ; 在相邻同类型 target 间循环
   ("M-p" . embark-previous-symbol)
   :custom
+  ;; 执行动作后不退出 minibuffer，便于连续对多个候选执行动作
   (embark-quit-after-action nil)
-  (prefix-help-command #'embark-prefix-help-command)
+  ;; 指示器：minimal 在回显区显示当前 target 类别；highlight 高亮 target；
+  ;; isearch 在增量搜索时高亮 target
   (embark-indicators '(embark-minimal-indicator
-                       embark-highlight-indicator
-                       embark-isearch-highlight-indicator))
-  (embark-cycle-key ".")
-  (embark-help-key "?")
+                        embark-highlight-indicator
+                        embark-isearch-highlight-indicator))
+  (embark-cycle-key ".")            ; 动作菜单里循环切换不同 target 的键
+  (embark-help-key "?")             ; 查看完整动作 keymap 的帮助键
   :config
+  ;; 候选排序与 finder 调整
+  ;; 让候选项按 minibuffer 中显示的顺序排序，而非 embark 默认收集顺序，
+  ;; 与 vertico 显示一致，多选时更直观
   (setq embark-candidate-collectors
         (cl-substitute 'embark-sorted-minibuffer-candidates
                        'embark-minibuffer-candidates
                        embark-candidate-collectors))
-  (delete 'embark-target-flymake-at-point embark-target-finders))
+  ;; 关闭 flymake target，避免在 flymake 错误处误把错误当成 target
+  (delete 'embark-target-flymake-at-point embark-target-finders)
+
+  ;; 重复动作：执行后按同一动作键即可再次执行
+  (cl-pushnew 'down-list embark-repeat-actions)
+  (cl-pushnew 'recenter-top-bottom embark-repeat-actions)
+
+  ;; minibuffer 中的多选 / 导出 / 转换 / 批量动作
+  ;; 选中/取消选中当前候选项；处于 vertico 会话时选中后自动跳到下一项，便于连续多选。
+  ;; （动作菜单里已有默认按键：SPC 选中、A 全选执行、. 循环 target）
+  (defun clw/embark-select ()
+    "选中当前 target；处于 vertico 补全会话时选中后自动跳到下一项。"
+    (interactive)
+    (prog1 (embark-select)
+      (when (bound-and-true-p vertico--input)
+        (vertico-next))))
+  (keymap-set minibuffer-local-completion-map "C-SPC" #'clw/embark-select)
+  ;; 将候选项导出为可编辑 buffer：文件 -> Dired、buffer -> ibuffer、grep -> occur 等
+  (keymap-set minibuffer-local-completion-map "C-c C-o" #'embark-export)
+  ;; 把当前 minibuffer “变成”另一种补全（如 find-file <-> consult-buffer）
+  (keymap-set minibuffer-local-completion-map "C->" #'embark-become)
+  ;; 对所有已选中候选项批量执行同一动作
+  (keymap-set minibuffer-local-completion-map "M-*" #'embark-act-all)
+
+  ;; 对 *Messages* 中最后一条消息执行动作（来自 oantolin 技巧）
+  ;; 命令报错后按 C-h SPC，即可对最后一条错误信息里的文件名/URL 等做动作
+  (defun clw/embark-on-last-message (&optional arg)
+    "对 `*Messages*' 缓冲区最后一条消息执行 `embark-act'。"
+    (interactive "P")
+    (with-current-buffer (get-buffer-create "*Messages*")
+      (goto-char (point-max))
+      (backward-char 1)
+      (embark-act arg)))
+  (keymap-set help-map "SPC" #'clw/embark-on-last-message)
+
+  ;; helm/ido 式：用 completing-read 选择动作
+  ;; 记不住动作快捷键时很有用：M-x clw/embark-act-with-completing-read
+  ;; 会用 vertico 列出所有可用动作，选中即执行
+  (defun clw/embark-act-with-completing-read (&optional arg)
+    "用 `completing-read' 选择并执行 embark 动作。"
+    (interactive "P")
+    (let ((embark-prompter 'embark-completing-read-prompter)
+          (embark-indicators '(embark-minimal-indicator)))
+      (embark-act arg)))
+
+  ;; 作用于“当前 buffer 对应的文件”
+  ;; 让任何 buffer 都能用 embark 作用于其对应文件：在代码中按 C-. 后用 . 循环到
+  ;; this-buffer-file，即可对当前文件做 加载/编译/复制/重命名/外部打开/管道处理 等操作
+  (defun clw/embark-target-this-buffer-file ()
+    "把当前 buffer 对应的文件（或 buffer 名）作为 embark target。
+有文件时返回文件路径，便于 load/编译/拷贝等文件操作；
+无文件时退回 buffer 名，仍可执行 kill/clone 等缓冲区操作。"
+    (cons 'this-buffer-file (or (buffer-file-name) (buffer-name))))
+  (add-to-list 'embark-target-finders
+               #'clw/embark-target-this-buffer-file 'append)
+
+  (defvar clw/this-buffer-file-map
+    (let ((map (make-sparse-keymap)))
+      (pcase-dolist
+          (`(,key ,command)
+           '(("l" load-file)                         ; 加载当前文件 (Emacs Lisp)
+             ("b" byte-compile-file)                 ; 编译当前文件
+             ("c" copy-file)                         ; 复制文件
+             ("R" rename-file)                       ; 重命名文件
+             ("D" delete-file)                       ; 删除文件
+             ("g" revert-buffer-quick)               ; 从磁盘重新读入
+             ("u" rename-uniquely)                   ; 给 buffer 起唯一名
+             ("n" clone-buffer)                      ; 克隆 buffer
+             ("4" clone-indirect-buffer-other-window) ; 间接 buffer（其它窗口）
+             ("k" kill-buffer)                       ; 关闭 buffer
+             ("z" bury-buffer)                       ; 隐藏到 buffer 列表末尾
+             ("#" recover-this-file)                 ; 从自动保存恢复
+             ("!" shell-command)                     ; 以 shell 命令处理该文件
+             ("&" async-shell-command)               ; 异步 shell 命令
+             ("|" embark-shell-command-on-buffer)    ; 以 shell 命令处理 buffer 内容
+             ("x" embark-open-externally)            ; 用系统默认程序打开
+             ("t" toggle-truncate-lines)))           ; 折行开关
+        (define-key map (kbd key) command))
+      map)
+    "对“当前 buffer 对应文件”执行动作的 keymap。")
+
+  (add-to-list 'embark-keymap-alist
+               '(this-buffer-file . clw/this-buffer-file-map))
+
+  ;; project-file 复用文件动作，并可导出为 Dired
+  ;; 让 consult-project-buffer / project-find-file 的候选拥有文件动作，
+  ;; 按 C-c C-o 即可导出为 Dired 进行批量操作
+  (add-to-list 'embark-keymap-alist '(project-file . embark-file-map))
+  (add-to-list 'embark-exporters-alist '(project-file . embark-export-dired))
+
+  ;; Embark Collect / Export 的窗口布局
+  ;; 让 *Embark Export* / *Embark Collect* 在底部以贴合内容高度的窗口出现，
+  ;; 并阻止其它命令把它分屏切走（split-window 被忽略）
+  (setf (alist-get "^\\*Embark \\(?:Export\\|Collect\\).*\\*"
+                   display-buffer-alist nil nil 'equal)
+        '((display-buffer-in-direction)
+          (window-height . (lambda (win)
+                             (fit-window-to-buffer win (floor (frame-height) 3))))
+          (direction . below)
+          (window-parameters . ((split-window . #'ignore)))))
+
+  ;; 从动作菜单选窗口再执行默认动作
+  ;; 在动作菜单按 1/2/3/4/5/6/o 先选定目标窗口，再执行该 target 的默认动作。
+  ;; 例如：对文件 C-. 4 => 在其它窗口打开；对 symbol C-. 2 => 下分屏后执行默认动作。
+  ;; 目标 keymap 中已定义的同名键优先（如 this-buffer-file 的 4/t 不受影响）。
+  (defvar-keymap clw/window-prefix-map
+    :doc "embark 动作菜单中用于选择目标窗口的前缀键映射"
+    :suppress 'nodigits
+    "1" #'same-window-prefix
+    "2" #'clw/split-window-below
+    "3" #'clw/split-window-right
+    "4" #'other-window-prefix
+    "5" #'other-frame-prefix
+    "6" #'other-tab-prefix
+    "o" #'other-window-prefix)        ; 未装 ace-window，暂用 other-window-prefix 代替
+
+  ;; 占位命令：实际行为由下方 around 钩子决定（这样能借 last-command-event 拿到所按的键）
+  (defun clw/embark-prefix-window ()
+    "占位命令：实际行为由 `embark-around-action-hooks' 中注册的 around 钩子决定。"
+    (interactive))
+
+  (cl-defun clw/embark--call-prefix-action
+      (&rest rest &key run type &allow-other-keys)
+    "先执行 `clw/window-prefix-map' 中所按前缀键对应的命令，再执行该 type 的默认动作。"
+    (when-let* ((cmd (keymap-lookup clw/window-prefix-map
+                                  (key-description `[,last-command-event]))))
+      (funcall cmd))
+    (plist-put rest :action (embark--default-action type))
+    (apply run rest))
+
+  ;; 让“按下占位命令”时改走 around 钩子
+  (setf (alist-get 'clw/embark-prefix-window embark-around-action-hooks)
+        '(clw/embark--call-prefix-action))
+
+  ;; 把每个前缀键都绑到占位命令上（按下即触发上面的 around 钩子）
+  (map-keymap (lambda (key _cmd)
+                (keymap-set embark-general-map
+                            (key-description (make-vector 1 key))
+                            #'clw/embark-prefix-window))
+              clw/window-prefix-map))
 ;;@@EMBARK-CONSULT 联动 embark 与 consult
 (use-package embark-consult
   :hook

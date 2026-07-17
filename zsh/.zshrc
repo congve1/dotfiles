@@ -146,6 +146,7 @@ alias emacs-cli="$EDITOR"
 # ==============================================================================
 # 本地二进制工具目录
 export PATH="$HOME/.local/bin:$PATH"
+export PATH="/home/clw/.bun/bin:$PATH"
 
 # zoxide 智能目录跳转
 if command -v zoxide &>/dev/null; then
