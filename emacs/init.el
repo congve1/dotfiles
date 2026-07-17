@@ -1182,8 +1182,19 @@ If in WSL, try to get gateway via system commands."
   (enable-recursive-minibuffers t)
   (inhibit-message-regexps (append inhibit-message-regexps
                                    '("^Saving file" "^Wrote" "^Indentation setup for shell")))
-  (set-message-functions '(inhibit-message))
-  :init (minibuffer-depth-indicate-mode))
+ (set-message-functions '(inhibit-message))
+  :init (minibuffer-depth-indicate-mode)
+  :config
+  ;; minibuffer 输入时抑制 `message' 回显，避免后台消息打断/覆盖正在输入的内容
+  ;; `set-message-functions' 中的函数返回“非 nil 且非字符串”即不显示该消息；
+  ;; 这里在 minibuffer 激活时返回 t。消息仍会记录到 *Messages* buffer，
+  ;; 只是不在屏幕上闪现（需要时用 `C-h e' 或打开 *Messages* 查看）。
+  ;; 与 `inhibit-message'（按 `inhibit-message-regexps' 正则抑制）共存：
+  ;; 二者任一返回非 nil 即抑制，结果即“minibuffer 激活或匹配正则则不显示”。
+  (defun clw/inhibit-message-in-minibuffer (_message)
+    "minibuffer 激活时返回 t，以抑制 `message' 的回显。"
+    (and (active-minibuffer-window) t))
+  (add-hook 'set-message-functions #'clw/inhibit-message-in-minibuffer))
 ;;@@ simple
 (use-package simple
   :bind
