@@ -61,7 +61,7 @@
 
 (defvar clw/font-size (cond ((eq system-type 'darwin) 15)
                             ((eq system-type 'windows-nt) 13.5)
-                            (t 16))
+                            (t 17))
   "Current font size."
   )
 
@@ -83,13 +83,50 @@
         (alist-get 'mono clw/fonts)
       font)))
 (defun clw/load-default-font ()
-  "Load default font configuration"
+  "Load default font configuration."
   (let ((default-font (format "%s-%s:%s"
                               (clw/get-font-family 'mono)
                               clw/font-size clw/font-weight)))
     (add-to-list 'default-frame-alist (cons 'font default-font))))
 
+(defun clw/load-face-font ()
+  "Load face font configuration."
+  (let ((sans (format "%s-%s:%s" (clw/get-font-family 'sans)
+                      clw/font-size clw/font-weight))
+        (mono (format "%s-%s:%s" (clw/get-font-family 'mono)
+                      clw/font-size clw/font-weight))
+        (serif (format "%s-%s:%s" (clw/get-font-family 'serif)
+                       clw/font-size clw/font-weight)))
+    (set-face-attribute 'variable-pitch nil :font sans)
+    (set-face-attribute 'variable-pitch-text nil :family serif)
+    (set-face-attribute 'fixed-pitch nil :font mono)
+    (set-face-attribute 'fixed-pitch-serif nil :font mono)
+    (set-face-attribute 'mode-line-active nil :font sans)
+    (set-face-attribute 'mode-line-inactive nil :font sans)))
+
+(defun clw/load-charset-font (&optional font)
+  "Load charset FONT configuration."
+  (let ((default-font (or font (format "%s-%s:%s"
+                                       (clw/get-font-family 'mono)
+                                       clw/font-size clw/font-weight)))
+        (cjk-font (clw/get-font-family 'cjk))
+        (symbol-font (clw/get-font-family 'symbol))
+        (scale-factor (if (eq system-type 'windows-nt) 1.1 1.2))
+        )
+    (set-frame-font default-font)
+    ;;(add-to-list 'face-font-rescale-alist `(,cjk-font . ,scale-factor))
+    (dolist (charset '(kana han hangul cjk-misc bopomofo))
+      (set-fontset-font t charset cjk-font))
+    (set-fontset-font t 'symbol symbol-font)
+    (set-fontset-font t 'unicode symbol-font nil 'append)))
+
+
 (clw/load-default-font)
+;; Run after startup
+(add-hook 'after-init-hook (lambda ()
+                             (when (display-graphic-p)
+                               (clw/load-face-font)
+                               (clw/load-charset-font))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;early-init.el ends here
