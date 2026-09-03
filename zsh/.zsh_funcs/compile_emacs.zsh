@@ -54,6 +54,11 @@ compile_emacs() {
     ./configure \
         --prefix="$prefix" \
         --with-native-compilation=aot \  # 启用原生编译（加速 TUI）
+        --with-gnutls \
+        --without-dbus \
+        --without-pop \
+        --with-xpm \
+        --with-imagemagick \
 	--with-tree-sitter
 
     # --------------------------
