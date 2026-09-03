@@ -73,7 +73,7 @@
     (sans . "Maple Mono NF CN")
     (serif . "Maple Mono NF CN")
     (cjk . "Maple Mono NF CN")
-    (symbol . "Segoe UI Emoji")
+    (symbol . "Noto Color Emoji")
     )
   "Fonts to use")
 (defun clw/get-font-family (key)
