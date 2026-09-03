@@ -120,8 +120,12 @@
     ;;(add-to-list 'face-font-rescale-alist `(,cjk-font . ,scale-factor))
     (dolist (charset '(kana han hangul cjk-misc bopomofo))
       (set-fontset-font t charset cjk-font))
-    (set-fontset-font t 'symbol symbol-font)
-    (set-fontset-font t 'unicode symbol-font nil 'append)))
+    (set-fontset-font t 'emoji (font-spec :family symbol-font) nil 'prepend)
+    (set-fontset-font t 'symbol (font-spec :family symbol-font) nil 'prepend)
+    ;; 'emoji script 覆盖不全的区块显式补上
+    (set-fontset-font t '(#x2600 . #x27BF) (font-spec :family symbol-font) nil 'prepend)
+    (set-fontset-font t '(#x2B00 . #x2BFF) (font-spec :family symbol-font) nil 'prepend)
+    ))
 
 
 (clw/load-default-font)
