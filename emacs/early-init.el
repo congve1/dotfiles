@@ -73,7 +73,10 @@
     (sans . "Maple Mono NF CN")
     (serif . "Maple Mono NF CN")
     (cjk . "Maple Mono NF CN")
-    (symbol . "Noto Color Emoji")
+    (symbol . ,(pcase system-type
+                 ('windows-nt "Segoe UI Emoji")   ; Windows 走 COLR 渰染链路
+                 ('darwin "Apple Color Emoji")    ; 顺手把 macOS 也覆盖了
+                 (_ "Noto Color Emoji")))         ; Linux/WSL 用 CBDT 没问题
     )
   "Fonts to use")
 (defun clw/get-font-family (key)
