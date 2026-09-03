@@ -125,9 +125,16 @@
     ;; 'emoji script 覆盖不全的区块显式补上
     (set-fontset-font t '(#x2600 . #x27BF) (font-spec :family symbol-font) nil 'prepend)
     (set-fontset-font t '(#x2B00 . #x2BFF) (font-spec :family symbol-font) nil 'prepend)
+    ;; 全局 Unicode 兜底链：所有更优先的绑定（主字体、emoji prepend）都没命中的
+    ;; 码位，才按顺序尝试这些字体。放在 after-init 的字体加载部分。
+    (dolist (family (seq-filter
+                     (lambda (f) (member f (font-family-list)))
+                     '("Segoe UI Symbol"       ; 符号大杂烩，Windows 自带，覆盖数千字符
+                       "Segoe UI Historic"     ; 古文字（如鲁尼文、楔形文字），Windows 自带
+                       "Noto Sans Symbols 2"   ; Linux/WSL 侧装了就生效
+                       "Symbola")))
+      (set-fontset-font t 'unicode (font-spec :family family) nil 'append))
     ))
-
-
 (clw/load-default-font)
 ;; Run after startup
 (add-hook 'after-init-hook (lambda ()
