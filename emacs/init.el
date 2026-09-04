@@ -2343,6 +2343,11 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (setf (alist-get 'go-mode apheleia-mode-alist)
         (if (executable-find "goimports") 'goimports 'gofmt))
   ;; JavaScript/TypeScript 使用 prettier 格式化
+  ;; prettier 直接用 .cmd 绝对路径，绕开 Windows 下损坏的 apheleia-npx 启动器
+  (setf (alist-get 'prettier apheleia-formatters)
+        '("prettier"
+          "--stdin-filepath" filepath
+          (apheleia-formatters-js-indent "--use-tabs" "--tab-width")))
   (setf (alist-get 'js-mode apheleia-mode-alist) 'prettier)
   (setf (alist-get 'js-ts-mode apheleia-mode-alist) 'prettier)
   (setf (alist-get 'typescript-ts-mode apheleia-mode-alist) 'prettier)
