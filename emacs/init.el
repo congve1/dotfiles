@@ -44,10 +44,10 @@
 ;; custom-file 必须加载，否则 Customize UI 保存的设置重启后会静默丢失
 (load custom-file :noerror :nomessage)
 ;;@@ 调整gc
-;; 启动期间使用大阈值避免 GC 拖慢加载，启动完成后恢复为较小阈值，
-;; 使运行期 GC 更频繁但每次耗时更短，编辑更流畅。
+;; 启动期间使用大阈值避免 GC 拖慢加载，启动完成后恢复为中等阈值；
+;; 64MB 避免 magit 刷新等重分配场景频繁触发 GC（magit 官方 wiki 建议值）。
 ;; 参考: https://github.com/purcell/emacs.d/blob/master/init.el#L27
-(let ((normal-gc-cons-threshold (* 20 1024 1024))
+(let ((normal-gc-cons-threshold (* 64 1024 1024))
       (init-gc-cons-threshold (* 128 1024 1024)))
   (setq gc-cons-threshold init-gc-cons-threshold)
   (setq gc-cons-percentage 0.5)
@@ -1353,7 +1353,6 @@ Lisp function does not specify a special indentation."
           consult-eglot
           wgrep ; 基于 grep 的批量替换工具
           devdocs ; 提供来自 devdocs 的文档支持
-          expand-region ; 选中扩展
           diminish ; 让某些 mode 标识不在 modeline 显示
           ;;yasnippet ; 强大的代码模板工具
           breadcrumb ; 面包屑导航
@@ -1365,16 +1364,15 @@ Lisp function does not specify a special indentation."
           tempel ; 代码模板引擎
           cape ; 为 corfu 提供一些后端
           envrc ; 类似 buffer-env
-          powershell ; 在 Emacs 中打开 powershell, windows 
-          emacsql ; 统一的 SQL 前端
+          powershell ; 在 Emacs 中打开 powershell, windows
           f ; 稍微好用一点的文件 API
           p-search ; 某种搜索工具
           doom-themes
           doom-modeline
           rainbow-delimiters
           highlight-escape-sequences
-          multiple-cursors
-          move-dup          
+          iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
+          move-dup
           symbol-overlay
           ws-butler
           diff-hl
@@ -1432,6 +1430,45 @@ package-install 手动重试即可。"
         (package-quickstart-refresh))
       (when (and proxy-was-off clw/proxy-enabled)
         (message "[clw] 安装完成，自动关闭代理...")
+        (clw/proxy-toggle)))))
+
+(defun clw/update-packages ()
+  "更新所有包：刷新源 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
+
+`clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如
+yynt、project-x）装完后不会自动升级，本命令补上更新通道：
+1. `package-refresh-contents' 刷新源索引；
+2. `package-upgrade-all' 升级全部已安装的 ELPA 包；
+3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包。
+
+代理管理逻辑同 `clw/install-packages'：若代理未开启，会在更新前
+开启并在结束后关闭；若已开启，则保持不动。"
+  (interactive)
+  (let ((proxy-was-off (not clw/proxy-enabled)))
+    (when proxy-was-off
+      (message "[clw] 更新前自动开启代理...")
+      (clw/proxy-toggle))
+    (unwind-protect
+        (progn
+          (package-refresh-contents)
+          (condition-case err
+              (package-upgrade-all)
+            (error
+             (message "[clw] package-upgrade-all failed: %S" err)))
+          (dolist (spec package-vc-selected-packages)
+            (let ((pkg (car spec)))
+              (condition-case err
+                  (progn
+                    (message "[clw] Updating %s..." pkg)
+                    (package-vc-update pkg))
+                (error
+                 (message "[clw] Package %s update failed: %S" pkg err)))))
+          (message "[clw] 所有包更新完成"))
+      ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
+      (when (bound-and-true-p package-quickstart)
+        (package-quickstart-refresh))
+      (when (and proxy-was-off clw/proxy-enabled)
+        (message "[clw] 更新完成，自动关闭代理...")
         (clw/proxy-toggle)))))
 
 (defun clw/package-missing-p ()
@@ -2214,17 +2251,15 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@ highlight-escape-sequences 给字符串和正则里的转义字符（如 \n、\t、\x1b）上色，让你一眼看清哪些字符是“特殊的
 (use-package highlight-escape-sequences
   :hook (prog-mode . hes-mode))
-;;@@ multiple-cursors 让你同时在多个位置（光标）进行编辑
-(use-package multiple-cursors
-  :bind
-  ("C-S-c C-S-c" . mc/edit-lines)
-  ("C->" . mc/mark-next-like-this)
-  ("C-<" . mc/mark-previous-like-this)
-  ("C-c C-<" . mc/mark-all-like-this)
-  ("C-\"" . mc/skip-to-next-like-this)
-  (:map mc/keymap ("M-N" . mc/insert-numbers))
-  :config
-  (add-to-list 'mc/unsupported-minor-modes 'auto-save-visited-mode))
+;;@@ iedit 基于 overlay 的高性能批量编辑（替代 multiple-cursors）
+;; 光标停在符号（或选中区域）上启动，编辑任意一处即实时同步全部出现位置；
+;; TAB 可在"只改当前处"与"同步全部"间切换，适合改名/批量替换场景。
+(use-package iedit
+  :bind ("C-S-c C-S-c" . iedit-mode)
+  :init
+  ;; iedit 默认把 C-; 绑到全局，会覆盖 eldoc-box-help-at-point 的绑定，
+  ;; 置 nil 取消其默认全局键，只用上面自定义的键进入
+  (setopt iedit-toggle-key-default nil))
 ;;@@ move-dup 一键复制当前行 / 区域，或将行/区域向上/向下移动。
 (use-package move-dup
   :bind
@@ -2257,6 +2292,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@ diff-hl
 (use-package diff-hl
   :if (display-graphic-p)
+  :custom
+  ;; Emacs 31+ 支持异步更新 fringe 标记：magit 刷新后 diff-hl 的
+  ;; 逐 buffer git 调用不再同步阻塞（要求内置 VC backend，git/hg 满足）
+  (diff-hl-update-async t)
   :bind (:map diff-hl-mode-map
          ("<left-fringe> <mouse-1>" . diff-hl-diff-goto-hunk)
          ("M-]" . diff-hl-next-hunk)
@@ -2274,6 +2313,8 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :custom
   (magit-diff-refine-hunk t)
   (magit-module-sections-nested nil)
+  ;; Windows 上 pty 只是模拟实现，每个 git 进程免掉这层包装的开销
+  (magit-process-connection-type nil)
   (magit-display-buffer-function
    #'magit-display-buffer-same-window-except-diff-v1)
   (magit-bury-buffer-function 'magit-restore-window-configuration)
