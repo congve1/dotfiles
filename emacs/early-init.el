@@ -12,6 +12,10 @@
 
 (setq load-prefer-newer t)
 (setq package-enable-at-startup nil)
+;; 把 ~50 个包的 autoload 合并进一个 quickstart 文件，显著减少启动期文件 IO。
+;; 注意：增删包后需刷新缓存（已在 `clw/install-packages' 收尾自动做）；
+;; 手动装包后可运行 M-x package-quickstart-refresh。
+(setq package-quickstart t)
 ;; 暂存 file-name-handler-alist 并在启动期间置空，减少启动期文件查找开销。
 ;; 在 init.el 的 emacs-startup-hook 中恢复（见 GC 配置部分）。
 (defvar clw/init-file-name-handler-alist file-name-handler-alist)
@@ -20,8 +24,11 @@
 ;; It must be set before loading `use-package'.
 (setq use-package-enable-imenu-support t)
 
-;; Prevent unwanted runtime compilation for Emacs with native-comp
-(setq native-comp-jit-compilation nil)
+;; 允许 native-comp 的 JIT 原生编译：便携目录已带 binutils（as/ld），
+;; 编译在后台异步进行。若出现 as/ld 找不到的报错，把本行改回 nil 即回退。
+(setq native-comp-jit-compilation t)
+;; 后台编译的警告静默处理，避免 *Warnings* 弹窗打断
+(setq native-comp-async-report-warnings-errors 'silent)
 
 ;; Suppress "Loading ...done" messages during startup
 (setq inhibit-message-regexps '("^Loading "))

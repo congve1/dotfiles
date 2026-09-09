@@ -41,6 +41,8 @@
            (file-exists-p clw-custom-example-file))
   ;; Copy template
   (copy-file clw-custom-example-file custom-file))
+;; custom-file 必须加载，否则 Customize UI 保存的设置重启后会静默丢失
+(load custom-file :noerror :nomessage)
 ;;@@ 调整gc
 ;; 启动期间使用大阈值避免 GC 拖慢加载，启动完成后恢复为较小阈值，
 ;; 使运行期 GC 更频繁但每次耗时更短，编辑更流畅。
@@ -59,16 +61,13 @@
                       clw/init-file-name-handler-alist)))))
 ;;@@ emacs 版本必须大于等于 30.1
 (when (version< emacs-version "30.1")
-  (error "init.el: emacs version must >= 29.1"))
+  (error "init.el: emacs version must >= 30.1"))
 ;;@@ Emacs 31 新特性，缓存 load-path 加快加载速度，大约提升 15%
 ;; (when (boundp 'load-path-filter-function)
 ;;   (setq load-path-filter-function #'load-path-filter-cache-directory-files))
-;; 通过设定以下变量减小搜索项数量也能带来类似的提升，但在提交上述补丁后下面的选项
-;; 没有太大的提升：https://emacs-china.org/t/windows-dev-drive-emacs/29362/22
-(when nil
-  (setq load-suffixes '(".elc" ".el"))
-  (setq load-file-rep-suffixes '("")))
-
+;; 通过设定 `load-suffixes' / `load-file-rep-suffixes' 减小搜索项数量也能带来
+;; 类似提升，但在提交上述补丁后收益不大（已验证，原死代码块已删除）：
+;; https://emacs-china.org/t/windows-dev-drive-emacs/29362/22
 (when (boundp 'load-path-filter-function)
   (setq load-path-filter-function #'load-path-filter-cache-directory-files)
   (when (require 'persistent-cached-load-filter nil t)
@@ -221,6 +220,10 @@
 (put 'narrow-to-region 'disabled nil)
 (put 'narrow-to-page 'disabled nil)
 
+;;@@ 跨平台：删除文件统一进回收站
+;; Windows 走系统回收站；Linux/WSL 走 freedesktop Trash（~/.local/share/Trash）
+(setopt delete-by-moving-to-trash t)
+
 ;;@@ Windows 相关配置
 (when sys/win32p
   ;; 为 Windows 添加 Super 和 Hyper 按键
@@ -231,8 +234,6 @@
   (setq w32-apps-modifier 'hyper)
   ;; 默认的 4KB 管道 buffer 太小了点，给到 64KB
   (setq w32-pipe-buffer-size (* 64 1024))
-  ;; 在 Windows 下删除文件时默认移动到垃圾箱/回收站
-  (setopt delete-by-moving-to-trash t)
   ;; 在 Windows 上没必要搜索两遍 auto-mode-alist，
   ;; 因为 Windows 文件系统忽略大小写
   (setopt auto-mode-case-fold nil)
@@ -243,6 +244,21 @@
 ;; 添加 ~/.local/bin 到 exe-path
 (when sys/linuxp
   (add-to-list 'exec-path (expand-file-name "~/.local/bin")))
+
+;;@@ WSL 下用 wslview 打开 URL/文件
+;; WSL 内 xdg-open 通常缺失，org 链接、embark 的 x（外部打开）都需要它。
+;; 依赖 wslu 包：pacman -S wslu
+(when sys/wslp
+  (setopt browse-url-browser-function #'browse-url-generic
+          browse-url-generic-program "wslview"))
+
+;;@@ Windows 下把 shell 指向 Git Bash
+;; 默认 cmdproxy.exe 跑不了 ob-shell 生成的 sh 脚本（org-babel 的 shell 块
+;; 会报错），且其 GBK 输出与全局 utf-8 编码冲突。bash 在 PATH 时统一改用
+;; bash：ob-shell、shell-command、compile（F5）同步受益。
+(when (and sys/win32p (executable-find "bash"))
+  (setopt shell-file-name "bash")
+  (setopt shell-command-switch "-c"))
 
 ;;@@ clash
 ;; 辅助函数，获取网关地址，方便wsl使用
@@ -275,17 +291,22 @@ If in WSL, try to get gateway via system commands."
         ;; 返回网关或默认值
         (or gw fallback)))))
 
+(defcustom clw/proxy-port 7897
+  "本地代理（如 clash）的监听端口，随本机代理软件配置调整。"
+  :type 'integer
+  :group 'clw)
+
 (defvar clw/proxy-enabled nil
-  "是否已启用 clash(7897) 代理环境变量。默认不开启，用 `clw/proxy-toggle' 手动开关。")
+  "是否已启用本地代理环境变量。默认不开启，用 `clw/proxy-toggle' 手动开关。")
 
 (defun clw/proxy-toggle ()
-  "切换 clash(7897) 代理环境变量的开启/关闭。
-开启时用 `clw/get-default-gateway' 获取网关地址，设置 HTTP_PROXY/HTTPS_PROXY
-及 `url-proxy-services'；关闭时清空这些变量。
-需自行确保 clash 已在运行（监听 7897）。"
+  "切换本地代理环境变量的开启/关闭。
+开启时用 `clw/get-default-gateway' 获取网关地址，端口取 `clw/proxy-port'，
+设置 HTTP_PROXY/HTTPS_PROXY 及 `url-proxy-services'；关闭时清空这些变量。
+需自行确保代理软件已在运行并监听 `clw/proxy-port'。"
   (interactive)
   (let* ((gateway (clw/get-default-gateway))
-         (proxy (format "%s:7897" gateway)))
+         (proxy (format "%s:%s" gateway clw/proxy-port)))
     (if clw/proxy-enabled
         (progn
           (dolist (var '("HTTP_PROXY" "HTTPS_PROXY" "http_proxy" "https_proxy"))
@@ -392,8 +413,9 @@ If in WSL, try to get gateway via system commands."
 ;;@@ELEC-PAIR 括号匹配高亮
 (add-hook 'prog-mode-hook 'electric-pair-mode)
 ;;@@ ELEC_INDENT
-(use-package elec-pair
-  :config (electric-indent-mode))
+;; electric-indent-mode 默认开启；此处显式开启以防被其它配置 toggle 掉
+;;（注意：无参调用 `(electric-indent-mode)' 是 toggle，会把默认开启的状态关掉）
+(electric-indent-mode 1)
 ;;@@DELETE-SELECTION-MODE 在选中区域时输入内容将删除区域
 (delete-selection-mode t)
 ;;@@ compile
@@ -523,51 +545,18 @@ If in WSL, try to get gateway via system commands."
 (auto-save-visited-mode t)
 ;; 60s 保存一次，默认值是 5
 (setopt auto-save-visited-interval 60)
-;; 允许其他插件的配置添加自己的逻辑到 buffer 保存中来
-(defvar clw/auto-save-visited-disable-predicates nil
-  "谓词函数列表，当存在谓词返回 t 时，则不保存。")
+;; `auto-save-visited-predicate' 返回 t 才会保存对应 buffer。
+;; 不保存的情形：无文件 buffer；gpg 文件（交给 epa 处理）；org-capture 进行中。
+;; 保存间隔 60s，corfu 弹窗不可能存活那么久，无需针对补全框架的谓词。
 (defun clw/auto-save-visited-savep ()
-  "绑定于 `auto-save-visited-predicate' 的函数。
-
-当 `clw/auto-save-visited-disable-predicates' 中的某个谓词函数返回 t
-时，该函数返回 nil。这说明某个 buffer 不应该被保存。"
-  (not (seq-some (lambda (p) (funcall p))
-                 clw/auto-save-visited-disable-predicates)))
-(setopt auto-save-visited-predicate
-        #'clw/auto-save-visited-savep)
-;; 来自 tetosave 中的一些判断谓词，可能有用
-(defun clw/auto-save-visited-pred-org-capture ()
-  "检查当前 buffer 是否存在 CAPTURE buffer。
-
-当使用 org-capture 时，由于它使用了 indirect buffer 来在 buffer
-中添加新的实体，CAPTURE buffer 的 `buffer-file-name' 为 `nil' 不会
-被保存，但是捕获的目的 buffer 会被自动保存。通过检查 buffer 是否存在
-带有 CAPTURE- 前缀的同名 buffer 来判断是否正处于 CAPTURE 状态。"
-  (eq (buffer-base-buffer
-       (get-buffer (concat "CAPTURE-" (buffer-name))))
-      (current-buffer)))
-(defun clw/auto-save-visited-pred-corfu ()
-  "检查当前 buffer 是否正在用 corfu，避免保存打断补全。"
-  (and (boundp 'corfu--total)
-       (not (zerop corfu--total))))
-(defun clw/auto-save-visited-pred-company ()
-  "检查当前 buffer 是否正在用 company，避免保存打断补全。"
-  (bound-and-true-p company-candidates))
-(defun clw/other-disabled-predicates ()
-  (and (not (buffer-live-p (get-buffer " *vundo tree*")))
-       (not (string-suffix-p "gpg" (file-name-extension (buffer-name)) t))
+  "绑定于 `auto-save-visited-predicate' 的函数，返回 t 表示允许保存。"
+  (and (buffer-file-name)
+       (not (string-equal (file-name-extension (buffer-file-name)) "gpg"))
+       ;; org-capture 使用 indirect buffer，此时不保存捕获的目的 buffer
        (not (eq (buffer-base-buffer
                  (get-buffer (concat "CAPTURE-" (buffer-name))))
-                (current-buffer)))
-       (or (not (boundp 'corfu--total)) (zerop corfu--total))
-       (or (not (boundp 'yas--active-snippets))
-           (not yas--active-snippets))))
-;; 不过当时间间隔足够大时似乎不需要担心补全的问题。
-(setq clw/auto-save-visited-disable-predicates
-      (list #'clw/auto-save-visited-pred-org-capture
-            #'clw/auto-save-visited-pred-corfu
-            #'clw/auto-save-visited-pred-company
-            #'clw/other-disabled-predicates))
+                (current-buffer)))))
+(setopt auto-save-visited-predicate #'clw/auto-save-visited-savep)
 ;;@@RECENTF 保留最近文件打开记录
 (use-package recentf
   :bind (("C-c r" . recentf-open))
@@ -582,11 +571,14 @@ If in WSL, try to get gateway via system commands."
   (recentf-mode 1)
   ;; 启动时显示 recentf buffer
   ;;(setopt initial-buffer-choice 'recentf-open-files)
-  ;; 每三小时保存一次最近文件列表
+  ;; 每两小时保存一次最近文件列表
   (defvar clw/recentf-save-timer nil)
   (unless clw/recentf-save-timer
     (setq clw/recentf-save-timer
           (run-at-time nil (* 2 60 60) 'recentf-save-list)))
+  ;; 空闲 10 分钟时清理 recentf 中已不存在的文件
+  ;;（'never 只是关掉了启动时逐个 stat，死条目仍需定期清理）
+  (run-with-idle-timer 600 t #'recentf-cleanup)
   )
 ;;@@SAVEPLACE 关闭 buffer 时保存光标位置
 ;; 和 recentf-mode 联动一下，可以保存最近打开文件在关闭时的 point 位置
@@ -596,13 +588,13 @@ If in WSL, try to get gateway via system commands."
   :config
   (winner-mode 1)
   ;; 给快捷键添加 repeat-mode 支持
-  (defvar clw/winner-repear-map
+  (defvar clw/winner-repeat-map
     (let ((map (make-sparse-keymap)))
       (define-key map (kbd "<up>") 'winner-undo)
       (define-key map (kbd "<down>") 'winner-redo)
       map))
   (dolist (cmd '(winner-undo winner-redo))
-    (put cmd 'repeat-map 'clw/winner-repear-map))
+    (put cmd 'repeat-map 'clw/winner-repeat-map))
   :bind (("C-x <up>" . winner-undo)
          ("C-x <down>" . winner-redo)))
 ;;@@ORG org-mode 基础配置
@@ -823,19 +815,27 @@ If in WSL, try to get gateway via system commands."
   :when (and (fboundp 'treesit-available-p)
              (treesit-available-p))
   :custom
+  ;; 只 remap 已安装 grammar 的语言：跨平台时（如 WSL 里新装的 Emacs）缺
+  ;; 某个 grammar 不至于打开文件就报 "No tree-sitter grammar"。
+  ;; 注意 treesit 语言名与 mode 名不同：csharp-ts-mode 对应 c-sharp，
+  ;; js-ts-mode 对应 javascript，typescript-ts-mode 对应 typescript。
   (major-mode-remap-alist
-   '((c-mode          . c-ts-mode)
-     (go-mode         . go-ts-mode)
-     (c++-mode        . c++-ts-mode)
-     (csharp-mode     . csharp-ts-mode)
-     (conf-toml-mode  . toml-ts-mode)
-     (css-mode        . css-ts-mode)
-     (java-mode       . java-ts-mode)
-     (javascript-mode . js-ts-mode)
-     (js-json-mode    . json-ts-mode)
-     (python-mode     . python-ts-mode)
-     (ruby-mode       . ruby-ts-mode)
-     (rust-mode       . rust-ts-mode)))
+   (cl-loop
+    for (mode ts lang) in
+    '((c-mode          c-ts-mode          c)
+      (go-mode         go-ts-mode         go)
+      (c++-mode        c++-ts-mode        c++)
+      (csharp-mode     csharp-ts-mode     c-sharp)
+      (conf-toml-mode  toml-ts-mode       toml)
+      (css-mode        css-ts-mode        css)
+      (java-mode       java-ts-mode       java)
+      (javascript-mode js-ts-mode         javascript)
+      (js-json-mode    json-ts-mode       json)
+      (python-mode     python-ts-mode     python)
+      (ruby-mode       ruby-ts-mode       ruby)
+      (rust-mode       rust-ts-mode       rust))
+    when (treesit-language-available-p lang)
+    collect (cons mode ts)))
   (c-ts-mode-indent-style 'linux)
   (c-ts-mode-indent-offset 8)
   :config
@@ -966,20 +966,18 @@ If in WSL, try to get gateway via system commands."
   (eglot-report-progress nil)
   (eglot-autoshutdown t)
   (eglot-code-action-indicator "✓")
-  (eglot-code-action-indications '(eldoc-hint mode-line))
   :config
   (add-to-list 'eglot-ignored-server-capabilities
                :documentHighlightProvider)
   (add-to-list 'eglot-ignored-server-capabilities
                :inlayHintProvider)
-  (add-to-list 'eglot-ignored-server-capabilities
-               :textDocument/hover)
+  ;; 注意保留 :textDocument/hover：eldoc-box-hover-mode 依赖它获取文档
   ;; 取消 eglot 的 log 消息，我不是 LSP server 的开发者
   (setopt eglot-events-buffer-size 0)
   ;; 在 mode-line 显示 action 操作。不然可能干扰 eldoc。Emacs 31
   (setopt eglot-code-action-indications '(mode-line))
-  ;; 关掉 flymake 的一些提示信息，太吵了
-  (add-to-list 'eglot-stay-out-of 'flymake)
+  ;; 不要把 flymake 加进 eglot-stay-out-of：那会让 LSP 诊断完全不进入 flymake，
+  ;; consult-flymake (M-g f) 与 flymake 的 eldoc 集成在 LSP buffer 里将没有数据
   ;; 固定 python 用 basedpyright（环境里同时装了 ruff，避免每次二选一）
   (add-to-list 'eglot-server-programs
                '((python-mode python-ts-mode) . ("basedpyright-langserver" "--stdio")))
@@ -989,7 +987,8 @@ If in WSL, try to get gateway via system commands."
   :defer t
   :custom
   (python-indent-offset 4)
-  (python-shell-interpreter "python3")
+  ;; Windows 官方 Python 只提供 python.exe / py.exe，没有 python3
+  (python-shell-interpreter (if sys/win32p "python" "python3"))
   (python-shell-completion-native-enable nil)
   (python-shell-completion-native-disabled-interpreters
    '("pypy" "ipython3" "jupyter" "python3"))
@@ -1000,13 +999,15 @@ If in WSL, try to get gateway via system commands."
   ;;@@ 自动检测 uv 项目的 .venv，让 REPL/LSP/formatter 都用项目虚拟环境
   ;; uv venv 默认在项目根创建 .venv；检测到就让 `run-python'、apheleia 的
   ;; ruff/black、eglot 的 pyright/pylsp 都对齐到项目 venv 的解释器与工具链。
-  ;; 非 uv 项目（无 .venv）回落到上面 :custom 设的全局 python3。
+  ;; 非 uv 项目（无 .venv）回落到上面 :custom 设的全局解释器。
   (defun clw/python-activate-uv-venv ()
     "若项目根存在 .venv，切换 python-shell 到该虚拟环境并扩展 exec-path。"
     (when-let* ((root (locate-dominating-file default-directory ".venv"))
                 (venv (expand-file-name ".venv" root))
-                (venv-bin (expand-file-name "bin" venv))
-                (venv-python (expand-file-name "python" venv-bin)))
+                ;; Windows 的 venv 布局是 Scripts/python.exe，Unix 是 bin/python
+                (venv-bin (expand-file-name (if sys/win32p "Scripts" "bin") venv))
+                (venv-python (expand-file-name (if sys/win32p "python.exe" "python")
+                                               venv-bin)))
       (when (file-executable-p venv-python)
         (setq-local python-shell-interpreter venv-python)
         (setq-local python-shell-virtualenv-root venv)
@@ -1065,6 +1066,8 @@ If in WSL, try to get gateway via system commands."
     (interactive)
     (unless (executable-find "go")
       (user-error "未找到 go，请先安装 Go 工具链"))
+    (unless (executable-find "bash")
+      (user-error "未找到 bash（安装脚本依赖 bash -c），请将 Git Bash 的 usr/bin 加入 PATH"))
     (let ((missing (cl-remove-if
                     (lambda (cell) (executable-find (symbol-name (car cell))))
                     clw/go-tools)))
@@ -1171,8 +1174,12 @@ If in WSL, try to get gateway via system commands."
 ;;@@Dired显示目录
 ;; 按照数字顺序排列文件，即 1,2,...,10,11...
 ;; https://emacs.stackexchange.com/a/5650
+;; Windows 的 ls-lisp 不支持 --group-directories-first（静默忽略），
+;; 想目录前置需按平台分支；其余参数两边通用。
 (setopt dired-listing-switches
-        "-laGh1v --group-directories-first")
+        (if sys/win32p
+            "-laGh1v"
+          "-laGh1v --group-directories-first"))
 ;;@@ minibuffer配置
 (use-package minibuffer
   :custom
@@ -1341,13 +1348,11 @@ Lisp function does not specify a special indentation."
           eldoc-box ; 提供悬浮的 eldoc 补全
           vundo ; 可视化 undo，undo-tree 的替代品
           magit ; 强大的 git UI
-          ibuffer-vc ; 为 ibuffer 添加基于项目的分组
           orderless ; 乱序补全后端
           consult ; 异步查询框架
           consult-eglot
           wgrep ; 基于 grep 的批量替换工具
           devdocs ; 提供来自 devdocs 的文档支持
-          buffer-env ; 提供基于 direnv 的 buffer-local 环境
           expand-region ; 选中扩展
           diminish ; 让某些 mode 标识不在 modeline 显示
           ;;yasnippet ; 强大的代码模板工具
@@ -1422,6 +1427,9 @@ package-install 手动重试即可。"
                        (mapconcat (lambda (p) (symbol-name (car p)))
                                   (nreverse failed-packages) ", "))
             (message "[clw] 所有包安装成功")))
+      ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
+      (when (bound-and-true-p package-quickstart)
+        (package-quickstart-refresh))
       (when (and proxy-was-off clw/proxy-enabled)
         (message "[clw] 安装完成，自动关闭代理...")
         (clw/proxy-toggle)))))
@@ -2488,11 +2496,15 @@ way-func can be | or _"
 
 (defun clw/init-setup ()
   (interactive)
-  (when (equal (file-truename (expand-file-name "~/.emacs.d/init.el"))
-               (file-truename (buffer-file-name (current-buffer))))
+  ;; 用 user-emacs-directory 定位 init.el，file-equal-p 自动解析符号链接
+  ;; 且 Windows 下大小写不敏感；不要硬编码 ~/.emacs.d（Windows 上 HOME 指向
+  ;; 别处，该路径不存在，比较恒为 nil）
+  (when (and (buffer-file-name)
+             (file-equal-p (expand-file-name "init.el" user-emacs-directory)
+                           (buffer-file-name)))
     (setq-local outline-regexp ";;; init.el ---\\|;;; Code\\|;;@+")
     (setq-local outline-heading-alist '((";;; init.el ---" . 1) (";;; Code" . 1)
-                                        (";;@" . 2) (";;@@" . 3) (";;@@@ . 4")))
+                                        (";;@" . 2) (";;@@" . 3) (";;@@@" . 4)))
     (setq-local outline-minor-mode-use-buttons 'in-margins)
     (setq-local outline-minor-mode-highlight 'override)
     (setq-local outline-minor-mode-cycle t)
