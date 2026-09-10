@@ -659,15 +659,15 @@ If in WSL, try to get gateway via system commands."
         '((sequence "TODO(t)" "DOING(i!)" "HOLD(h@/!)"
                     "|" "DONE(d!)" "CANCEL(c@)"))
         org-todo-keyword-faces
-        '(("TODO"   . (:foreground "#e45649" :weight bold))
-          ("DOING"  . (:foreground "#986801" :weight bold))
-          ("HOLD"   . (:foreground "#a626a4" :weight bold))
-          ("DONE"   . (:foreground "#50a14f" :weight bold))
-          ("CANCEL" . (:foreground "#9ca0a4" :weight bold :strike-through t)))
+        '(("TODO"   . (:foreground "red" :weight bold))
+          ("DOING"  . (:foreground "orange" :weight bold))
+          ("HOLD"   . (:foreground "purple" :weight bold))
+          ("DONE"   . (:foreground "green" bold))
+          ("CANCEL" . (:foreground "gray" :weight bold :strike-through t)))
         org-priority-faces
-        '((?A . (:foreground "#e45649" :weight bold))
-          (?B . (:foreground "#986801" :weight bold))
-          (?C . (:foreground "#50a14f" :weight bold)))
+        '((?A . (:foreground "red" :weight bold))
+          (?B . (:foreground "orange" :weight bold))
+          (?C . (:foreground "green" :weight bold)))
         org-capture-templates
         '(("t" "Todo"    entry (file "gtd.org")
            "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
