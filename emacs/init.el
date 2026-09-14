@@ -895,10 +895,11 @@ If in WSL, try to get gateway via system commands."
       (ibuffer-filter-disable)
       (ibuffer-filter-by-filename root))))
 ;;@@AUTO-REVERT-MODE 当文件在外部被修改时，自动更新对应的 buffer
-;; 轮询间隔翻倍；有 file-notify 时不再轮询（注意：drvfs 等 notify 不可靠的
-;; 文件系统上将不自动 revert，需手动 M-x revert-buffer）
+;; 轮询间隔翻倍。通知 + 轮询双保险：w32notify 的 watch 偶发「建立成功但收不到
+;; 事件」（Windows 已知问题），avoid-polling t 会把这类 buffer 排除出轮询，
+;; 从此永不 revert。nil 仅多一个 10s 轮询兜底，桌面机开销可忽略
 (setopt auto-revert-interval 10)
-(setopt auto-revert-avoid-polling t)
+(setopt auto-revert-avoid-polling nil)
 (global-auto-revert-mode)
 ;;@@FILESETS 可用于保存一系列常用的文件，方便打开
 ;;te 添加一组自己常用的文件来让 emacs 启动时自动打开
