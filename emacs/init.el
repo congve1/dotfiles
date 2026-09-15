@@ -413,9 +413,12 @@ If in WSL, try to get gateway via system commands."
 ;;@@ELEC-PAIR 括号匹配高亮
 (add-hook 'prog-mode-hook 'electric-pair-mode)
 ;;@@ ELEC_INDENT
-;; electric-indent-mode 默认开启；此处显式开启以防被其它配置 toggle 掉
-;;（注意：无参调用 `(electric-indent-mode)' 是 toggle，会把默认开启的状态关掉）
-(electric-indent-mode 1)
+(use-package elec-pair
+  :config
+  (electric-indent-mode)
+  ;; < > 配对 (Rust 泛型)，| | 配对 (Rust 闭包)
+  (add-to-list 'electric-pair-pairs '(?< . ?>))
+  (add-to-list 'electric-pair-pairs '(?| . ?|)))
 ;;@@DELETE-SELECTION-MODE 在选中区域时输入内容将删除区域
 (delete-selection-mode t)
 ;;@@ compile
@@ -1363,6 +1366,7 @@ Lisp function does not specify a special indentation."
           expreg ; 类似 expand-region，但更好
           corfu ; corfu 补全前端，company 的替代品
           tempel ; 代码模板引擎
+          eglot-tempel ; eglot LSP snippet 桥接 tempel
           cape ; 为 corfu 提供一些后端
           envrc ; 类似 buffer-env
           powershell ; 在 Emacs 中打开 powershell, windows
@@ -1574,6 +1578,14 @@ yynt、project-x）装完后不会自动升级，本命令补上更新通道：
 ;;@@ vertico-sort
 (use-package vertico-sort
   :after vertico)
+;;@@ vertico-directory 目录导航（vertico 自带，无需额外安装）
+(use-package vertico-directory
+  :after vertico
+  :bind (:map vertico-map
+              ("RET" . vertico-directory-enter)
+              ("DEL" . vertico-directory-delete-char)
+              ("M-DEL" . vertico-directory-delete-word))
+  :hook (rfn-eshadow-update-overlay . vertico-directory-tidy))
 ;;@@ marginalia
 (use-package marginalia
   :init (marginalia-mode))
@@ -2246,6 +2258,11 @@ This differs from Avy's goto-char-timer in how it processes parens."
                 (cons #'tempel-expand
                       completion-at-point-functions)))
   (add-hook 'prog-mode-hook 'tempel-setup-capf))
+;;@@ EGLOT-TEMPEL eglot snippet 桥接 tempel
+(use-package eglot-tempel
+  :after (eglot tempel)
+  :config
+  (eglot-tempel-mode t))
 ;;@@ rainbow-delimiters  括号高亮增强包
 (use-package rainbow-delimiters
   :hook (prog-mode . rainbow-delimiters-mode))
@@ -2355,7 +2372,8 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :init (unbind-key "C-c C-r" org-mode-map))
 ;;@@ paredit
 (use-package paredit
-  :hook (emacs-lisp-mode . enable-paredit-mode)
+  :hook ((emacs-lisp-mode . enable-paredit-mode)
+         (lisp-mode . enable-paredit-mode))
   :config
   (setq paredit-lighter " Par")
   (dolist (binding '("C-<left>" "C-<right>" "M-s" "M-?"))
@@ -2412,8 +2430,30 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :config
   ;; auto-save project state after 5 seconds of idle time
   (setq project-x-auto-save-delay 5) ; nil to disable autosave
-  ;; use the custom prompter that shows session labels (optional)
-  (setq project-prompter #'project-x--project-prompt)
+  ;; use the custom prompter that shows session labels with "choose a dir" fallback
+  (defun clw/project-prompt ()
+    "Prompt for a project with session labels and 'choose a dir' fallback.
+Combines project-x's session label display with the built-in
+'... (choose a dir)' option from `project-prompt-project-dir'."
+    (let* ((dir-choice "... (choose a dir)")
+           (dirs (project-known-project-roots))
+           (projects (delq nil
+                           (mapcar (lambda (dir)
+                                     (condition-case nil
+                                         (project--find-in-directory dir)
+                                       (error nil)))
+                                   dirs)))
+           (choices (mapcar (lambda (proj)
+                              (let* ((root  (project-root proj))
+                                     (label (project-x--session-label root)))
+                                (cons (format "%s" label) root)))
+                            projects))
+           (candidates (append (mapcar #'car choices) (list dir-choice)))
+           (choice (completing-read "Switch to project: " candidates nil t)))
+      (if (equal choice dir-choice)
+          (read-directory-name "Select directory: " default-directory nil t)
+        (cdr (assoc choice choices)))))
+  (setq project-prompter #'clw/project-prompt)
   (project-x-mode 1)
   )
 ;;@@P-SEARCH 检索工具
