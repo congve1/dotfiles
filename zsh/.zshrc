@@ -66,10 +66,12 @@ zinit wait"1" lucid for \
     hlissner/zsh-autopair
 
 # ==============================================================================
-# fzf：gh-r 装二进制 + raw 官方补全/键绑定 + fzf-tab
+# fzf：gh-r 装二进制（主仓库 release 自带二进制资产；fzf-bin 已废弃勿用）
+# as"program" + pick 只软链 fzf 到 $ZPFX/bin，插件目录不进 PATH，
+# 目录里的 install 等脚本不会泄漏（上次 debtap 报错的根源）
 # ==============================================================================
 zinit ice lucid wait"1" from"gh-r" as"program" pick"fzf" bpick"*linux_amd64.tar.gz"
-zinit load junegunn/fzf
+zinit light junegunn/fzf
 
 zinit ice lucid wait"1" as"completion"
 zinit snippet https://raw.githubusercontent.com/junegunn/fzf/master/shell/completion.zsh
