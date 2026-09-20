@@ -122,6 +122,8 @@ zinit light eza-community/eza
 alias ls='eza'
 alias ll='eza -l --git'
 alias lt='eza -T'
+alias win_ssh='/mnt/c/Windows/System32/OpenSSH/ssh.exe'
+alias win_scp='/mnt/c/Windows/System32/OpenSSH/scp.exe'
 
 # ==============================================================================
 # zoxide：gh-r 装二进制，加载完成后立刻 init（自带 z 跳转 / zi 交互式跳转）
