@@ -170,6 +170,17 @@ alias emacs-cli="$EDITOR"
 export PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
 [[ -d "$HOME/.cargo/bin" ]] && export PATH="$HOME/.cargo/bin:$PATH"
+# 判断 go 是否存在，并把 GOBIN 幂等地加进 PATH
+if command -v go >/dev/null 2>&1; then
+  gobin="$(go env GOBIN)"
+  [ -n "$gobin" ] || gobin="$(go env GOPATH | cut -d: -f1)/bin"
+
+  case ":$PATH:" in
+    *":$gobin:"*) ;;                    # 已在 PATH 中，什么都不做
+    *) export PATH="$gobin:$PATH" ;;    # 加入 PATH（放前面优先）
+  esac
+  unset gobin
+fi
 
 # ==============================================================================
 # 常用别名与函数
