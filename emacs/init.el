@@ -2454,6 +2454,10 @@ Combines project-x's session label display with the built-in
           (read-directory-name "Select directory: " default-directory nil t)
         (cdr (assoc choice choices)))))
   (setq project-prompter #'clw/project-prompt)
+  ;; 启动时自动恢复上次活动的项目（buffer + 窗口布局 + 光标位置）
+  (setopt project-x-restore-last-project-on-startup t)
+  ;; 同时保存 magit/eshell/vterm/compilation 等特殊 buffer
+  (setopt project-x-save-extra-buffers t)
   (project-x-mode 1)
   )
 ;;@@P-SEARCH 检索工具
