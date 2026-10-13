@@ -755,6 +755,8 @@ If in WSL, try to get gateway via system commands."
                      (org-deadline-warning-days 0)))
             (todo "DOING"
                   ((org-agenda-overriding-header "In Progress")))
+            (tags-todo "PRIORITY=\"A\""
+                       ((org-agenda-overriding-header "重要事项 (Priority A)")))
             (agenda nil
                     ((org-agenda-entry-types '(:deadline))
                      (org-agenda-format-date "")
