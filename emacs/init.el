@@ -672,9 +672,16 @@ If in WSL, try to get gateway via system commands."
           (?B . (:foreground "orange" :weight bold))
           (?C . (:foreground "green" :weight bold)))
         org-capture-templates
-        '(("t" "Todo"    entry (file "gtd.org")
+        '(          ("t" "Todo"    entry (file "gtd.org")
            "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
            :clock-in t :clock-resume t)
+          ;; capture 时直接设定截止时间（%^{Deadline}t 会弹日历窗选日期）
+          ("d" "Todo+Deadline" entry (file "gtd.org")
+           "* TODO %?\nDEADLINE: %^{Deadline}t\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
+           :clock-in t :clock-resume t)
+          ;; 带起止时间的日程事件：%^{日期}T 选日期+开始时刻，-%^{结束时间} 补结束时刻
+          ("e" "Event" entry (file "gtd.org")
+           "* %^{事件名}\n<%^{日期}T-%^{结束时间}>\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
           ("n" "Note"    entry (file "notes.org")
            "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
           ("i" "Idea"    entry (file "idea.org")
@@ -684,7 +691,10 @@ If in WSL, try to get gateway via system commands."
            :clock-in t :clock-resume t)
           ("b" "Book"    entry (file+olp+datetree "book.org")
            "* Topic: %^{Description}  %^g %?\nAdded: %U")))
-  (setq org-babel-default-header-args:elisp '((:lexical . "yes")))
+  ;; 新版 org 已将 elisp 语言正名为 emacs-lisp（旧名 elisp 是其别名），
+  ;; 对旧名 setq 会在 org 加载时被 defvaralias 覆盖并报 warning，
+  ;; 且赋值丢失，故必须写新名
+  (setq org-babel-default-header-args:emacs-lisp '((:lexical . "yes")))
   :config
   ;; 创建目录（首次使用）
   (unless (file-exists-p org-directory) (make-directory org-directory t))
@@ -739,33 +749,73 @@ If in WSL, try to get gateway via system commands."
         org-agenda-block-separator ?─
         org-agenda-tags-column 'auto
         org-agenda-time-grid
+        ;; 网格线轻量化：时刻后一个浅点、空行对齐列一个点，
+        ;; 不再用长串 ┄ 把整行拉成噪声
         '((daily today require-timed)
           (800 1000 1200 1400 1600 1800 2000)
-          " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"))
+          " · " "·"))
+  ;; agenda 日视图去掉类别列（gtd: 这类文件名类别在日视图里只是噪声；
+  ;; todo/tags/search 视图保留）。想要中文类别名可在 gtd.org 加 #+CATEGORY: 日程
+  (setopt org-agenda-prefix-format
+          '((agenda . " %i%?-12t% s")
+            (todo . " %i %-12:c")
+            (tags . " %i %-12:c")
+            (search . " %i %-12:c")))
   (setq org-agenda-current-time-string
         "⭠ now ─────────────────────────────────────────────────"
         org-agenda-skip-scheduled-if-done t
         org-agenda-skip-deadline-if-done t
         org-agenda-skip-timestamp-if-done t)
+  ;; 截止时间提前 7 天显示（默认 14 偏长，与 "g" 总览的 Deadlines 块保持一致）；
+  ;; 截止条目的中文前缀：当天 / 未来 / 已超期 三种形态
+  (setopt org-deadline-warning-days 7)
+  (setopt org-agenda-deadline-leaders
+          '("截止:      " "%d 天后截止:  " "已超期 %d 天:  "))
+  ;; 计划事项的中文前缀（当天 / N 天后）
+  (setopt org-agenda-scheduled-leaders
+          '("计划:      " "计划 %2d 天后: "))
+  ;; 日期行中文化（2026-10-16 周五）：%u 为 ISO 星期数，不受系统 locale 影响
+  (defun clw/org-agenda-format-date-cn (date)
+    (let ((time (encode-time 0 0 0 (nth 1 date) (nth 0 date) (nth 2 date))))
+      (format "%d-%02d-%02d 周%s" (nth 2 date) (nth 0 date) (nth 1 date)
+              (aref ["一" "二" "三" "四" "五" "六" "日"]
+                    (1- (string-to-number (format-time-string "%u" time)))))))
+  (setopt org-agenda-format-date #'clw/org-agenda-format-date-cn)
+  ;; C-c C-d 日历弹窗中文化（星期/月份表头）
+  (setopt calendar-day-name-array ["周日" "周一" "周二" "周三" "周四" "周五" "周六"])
+  (setopt calendar-month-name-array ["一月" "二月" "三月" "四月" "五月" "六月"
+                                     "七月" "八月" "九月" "十月" "十一月" "十二月"])
+  ;; 有未办子任务的父任务自动变暗，议程层次更清晰
+  (setopt org-agenda-dim-blocked-tasks t)
   (setq org-agenda-custom-commands
-        '(("g" "Get Things Done (GTD)"
+        '(("g" "GTD 每日总览"
+           ;; 日程块显示当天到期/已过期的截止项（warning-days 0 = 只露当天）；
+           ;; 未来 7 天的截止项集中在下方的 Deadlines 块，避免重复刷屏
            ((agenda ""
-                    ((org-agenda-skip-function
-                      '(org-agenda-skip-entry-if 'deadline))
-                     (org-deadline-warning-days 0)))
+                    ((org-deadline-warning-days 0)))
             (todo "DOING"
-                  ((org-agenda-overriding-header "In Progress")))
+                  ((org-agenda-overriding-header "进行中")))
             (tags-todo "PRIORITY=\"A\""
                        ((org-agenda-overriding-header "重要事项 (Priority A)")))
             (agenda nil
                     ((org-agenda-entry-types '(:deadline))
                      (org-agenda-format-date "")
                      (org-deadline-warning-days 7)
-                     (org-agenda-overriding-header "Deadlines (next 7 days)")))
+                     (org-agenda-overriding-header "截止事项（未来 7 天）")))
             (tags-todo "inbox"
-                       ((org-agenda-overriding-header "Inbox")))
+                       ((org-agenda-overriding-header "收集箱")))
             (tags "CLOSED>=\"<today>\""
-                  ((org-agenda-overriding-header "Completed today"))))))))
+                  ((org-agenda-overriding-header "今日完成"))))))))
+
+;;@@ORG-APPT 日程到点提醒（打开 agenda 时自动同步有时段的事件）
+;; appt 为内置包，同 recentf/winner 的处理方式：不进 package-selected-packages
+(use-package appt
+  :config
+  (setq appt-message-warning-time 15    ; 提前 15 分钟开始提醒
+        appt-display-interval 5)        ; 每 5 分钟重复一次直到手动清除
+  (appt-activate 1)
+  ;; agenda 视图生成完毕时，把范围内带时间的事件登记进 appt
+  (add-hook 'org-agenda-finalize-hook #'org-agenda-to-appt))
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
@@ -778,7 +828,11 @@ If in WSL, try to get gateway via system commands."
         org-modern-todo t
         org-modern-keyword "‣ "
         org-modern-horizontal-rule t
-        org-modern-table t))
+        org-modern-table t
+        ;; 优先级 / 标签 / 块名徽标化（agenda 与 org buffer 同时生效）
+        org-modern-priority t
+        org-modern-tag t
+        org-modern-block-name t))
 
 ;;@@ORG-APPEAR 光标进入时自动展开 emphasis/link 标记
 (use-package org-appear
