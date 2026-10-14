@@ -643,6 +643,9 @@ If in WSL, try to get gateway via system commands."
         org-use-fast-todo-selection 'expert
         org-fast-tag-selection-single-key 'expert
         org-element-cache-persistent nil
+        ;; 精简链接后端：默认 11 个 ol-* 对应的外部应用（w3m/bbdb/gnus 等）
+        ;; 一个都没装，纯 require 负担；只保留 Info 手册链接
+        org-modules '(ol-info)
         org-export-dispatch-use-expert-ui t
         org-export-coding-system 'utf-8
         org-export-with-smart-quotes t
@@ -726,8 +729,7 @@ If in WSL, try to get gateway via system commands."
    'org-babel-load-languages
    '((emacs-lisp . t)
      (python     . t)
-     (shell      . t)
-     (C          . t)))
+     (shell      . t)))
   ;; 结构模板补充（<el<TAB> 展开为 emacs-lisp 代码块等）
   (require 'org-tempo)
   (dolist (tpl '(("el" . "src emacs-lisp")
@@ -743,7 +745,7 @@ If in WSL, try to get gateway via system commands."
   :config
   (setq org-agenda-window-setup 'current-window
         org-agenda-restore-windows-after-quit t
-        org-agenda-span 'day
+        org-agenda-span 'week
         org-agenda-start-on-weekday nil
         org-agenda-compact-blocks t
         org-agenda-block-separator ?─
@@ -789,10 +791,12 @@ If in WSL, try to get gateway via system commands."
   (setopt org-agenda-dim-blocked-tasks t)
   (setq org-agenda-custom-commands
         '(("g" "GTD 每日总览"
-           ;; 日程块显示当天到期/已过期的截止项（warning-days 0 = 只露当天）；
-           ;; 未来 7 天的截止项集中在下方的 Deadlines 块，避免重复刷屏
+           ;; 日程块保持日级（全局 span 已改周）；当天到期/已过期的截止项
+           ;; （warning-days 0 = 只露当天）；未来 7 天的截止项集中在下方的
+           ;; Deadlines 块，避免重复刷屏
            ((agenda ""
-                    ((org-deadline-warning-days 0)))
+                    ((org-agenda-span 'day)
+                     (org-deadline-warning-days 0)))
             (todo "DOING"
                   ((org-agenda-overriding-header "进行中")))
             (tags-todo "PRIORITY=\"A\""
@@ -816,6 +820,17 @@ If in WSL, try to get gateway via system commands."
   (appt-activate 1)
   ;; agenda 视图生成完毕时，把范围内带时间的事件登记进 appt
   (add-hook 'org-agenda-finalize-hook #'org-agenda-to-appt))
+
+;;@@ORG-PREWARM 启动后空闲时预热 org 全家桶（首次 C-c a a 的 ~10s require 链挪到这里）
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (run-with-idle-timer 2 nil
+              (lambda ()
+                (require 'org-agenda)    ; 级联加载 org + babel 语言 + tempo
+                (dolist (f (org-agenda-files))
+                  (when (and (stringp f) (file-exists-p f))
+                    (with-current-buffer (find-file-noselect f)
+                      (kill-buffer)))))))) ; 打开即关，触发 org-mode 模块加载链
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
