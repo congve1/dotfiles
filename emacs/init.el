@@ -1239,13 +1239,34 @@ If in WSL, try to get gateway via system commands."
   ;; 按字母排序，方便查找
   (setopt which-key-sort-order 'which-key-key-order-alpha)
   ;; 列间距
-  (setopt which-key-add-column-padding 1)
-  ;; 命令描述最长 40 字符，避免弹窗过宽
-  (setopt which-key-max-description-length 40)
+  (setopt which-key-add-column-padding 0)
+  ;; 分隔符缩短（默认 " → "）
+  (setopt which-key-separator " ")
+  ;; 命令描述最长 35 字符，避免弹窗过宽
+  (setopt which-key-max-description-length 35)
   :config
   ;; 启动全局 which-key-mode
   (which-key-mode)
-  (setq prefix-help-command #'repeated-prefix-help-command))
+  (setq prefix-help-command #'repeated-prefix-help-command)
+  ;; 匿名前缀组起名（源码 1927 行：无名 keymap 一律显示 "prefix"，看不出用途）
+  (which-key-add-key-based-replacements
+    "C-x 4"   "other window"
+    "C-x 5"   "other frame"
+    "C-x 6"   "2-column editing"
+    "C-x n"   "narrow/widen"
+    "C-x r"   "register/rectangle"
+    "C-x v"   "version control (VC)"
+    "C-x C-k" "keyboard macro"
+    "C-x p"   "project"
+    "C-x t"   "tab"
+    "C-x x"   "buffer operations"
+    "C-c @"   "outline"
+    "C-c p"   "cape"
+    "C-c ^"   "smerge")   ; Emacs 内置：smerge-mode（合并冲突）前缀
+  ;; org buffer 中 C-c ^ 优先显示为 org-sort（major-mode 作用域覆盖全局名）
+  (which-key-add-major-mode-key-based-replacements
+    'org-mode
+    "C-c ^" "org-sort"))
 ;;@@Dired显示目录
 ;; 按照数字顺序排列文件，即 1,2,...,10,11...
 ;; https://emacs.stackexchange.com/a/5650
@@ -1631,7 +1652,11 @@ yynt、project-x）装完后不会自动升级，本命令补上更新通道：
                       :foreground "DeepPink"
                       :underline "DeepPink"
                       :weight 'bold)
-  (winum-set-keymap-prefix (kbd "C-c")))
+  (winum-set-keymap-prefix (kbd "C-c"))
+  ;; 数字绑定在 winum-base-map 子表里（winum-keymap 外层只有 C-c 入口，
+  ;; 直接删外层是无效的）；选窗统一走 C-c ` + 数字（² 是 by-number 的重复键，一并删）
+  (dolist (k '("²" "0" "1" "2" "3" "4" "5" "6" "7" "8" "9"))
+    (define-key winum-base-map (kbd k) nil)))
 ;;@@PYIM elisp 实现的中文输入法
 (use-package pyim
   :init (setopt default-input-method "pyim")
