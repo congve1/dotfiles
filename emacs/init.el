@@ -2399,6 +2399,17 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :hook (emacs-startup . global-jinx-mode)
   :bind ("M-$" . jinx-correct)
   :custom (jinx-languages "en_US")
+  :init
+  ;; —— jinx 编译/运行环境：仅 Windows 且 msys2 目录存在时生效；
+  ;;    全部限定在 Emacs 进程内，不改 Windows 系统/用户 PATH ——
+  (when sys/win32p
+    (when (file-directory-p "D:/msys64/ucrt64/bin")
+      (add-to-list 'exec-path "D:/msys64/ucrt64/bin")   ; gcc/cc/pkg-config 可被发现
+      ;; pkg-config 定位 enchant-2（头文件 + 链接参数）
+      (when (file-exists-p "D:/msys64/ucrt64/lib/pkgconfig/enchant-2.pc")
+        (setenv "PKG_CONFIG_PATH" "D:/msys64/ucrt64/lib/pkgconfig"))
+      ;; 运行期 DLL 搜索：libenchant-2 + glib 系列（追加末尾，不遮蔽其他工具）
+      (setenv "PATH" (concat (getenv "PATH") ";D:/msys64/ucrt64/bin"))))
   :config (add-to-list 'jinx-exclude-regexps '(t "\\cc")))
 ;;@@ ws-butler
 (use-package ws-butler
