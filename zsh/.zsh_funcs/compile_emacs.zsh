@@ -18,12 +18,14 @@ compile_emacs() {
     # 3. 克隆/更新仓库
     # --------------------------
     if [[ ! -d ".git" ]]; then
-        echo "📥 克隆 Emacs 仓库（分支：$branch）..."
-        git clone "$repo_url" . || return 1
+        echo "克隆 Emacs 仓库（分支：$branch）..."
+        git clone --depth 1 -b "$branch" "$repo_url" . || return 1
     else
-        echo "🔄 更新仓库..."
-        git fetch origin || return 1
+        echo "更新仓库..."
+        git fetch --depth 1 origin "$branch" || return 1
+        git reset --hard "origin/$branch" || return 1
     fi
+
 
     # --------------------------
     # 4. 切换到目标分支
