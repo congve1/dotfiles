@@ -391,10 +391,10 @@ If in WSL, try to get gateway via system commands."
 (setq use-package-expand-minimally t)
 ;; 关闭 use-package 统计以减少加载开销；分析启动耗时可临时设为 t
 (setq use-package-compute-statistics nil)
-;; Initialize packages
-(unless (bound-and-true-p package--initialized) ; To avoid warnings in 27
-  (setq package-enable-at-startup nil)          ; To prevent initializing twice
-  (package-initialize))
+;; package-initialize 不在此处调用：Emacs 27+ 启动时自动初始化（early-init
+;; 已设 quickstart t + enable-at-startup nil），显式调用会触发
+;; "Unnecessary call to package-initialize" 警告；
+;; 完整初始化兜底已移入 clw/install-packages。
 (require  'use-package)
 ;;@@DIMINISH 放在最前面
 ;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
@@ -1434,7 +1434,8 @@ Lisp function does not specify a special indentation."
         '(;; 安装的包列表
           markdown-mode ; 提供 emacs 中的 markdown 支持
           ;;cnfonts ; 中英文字体对其，通过 `cnfonts-edit-profile' 进行设定
-          winum ; 快速的窗口间跳转
+          ace-window ; 窗口字母标号跳转（M-o，替代 winum）
+          pulsar ; 跳转后脉冲高亮当前行
           avy ; 快速跳转（M-j 输入字符序列跳转）
           pyim ; 拼音输入法
           pyim-basedict ; pyim 依赖项
@@ -1497,6 +1498,10 @@ Run after changing `package-selected-packages' or `package-vc-selected-packages'
 （bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
 package-install 手动重试即可。"
   (interactive)
+  ;; 兜底初始化（仅未初始化时调用；已初始化时再调会触发
+  ;; "Unnecessary call to package-initialize" 警告）
+  (unless (bound-and-true-p package--initialized)
+    (package-initialize))
   (let ((proxy-was-off (not clw/proxy-enabled))
         (failed-packages nil))
     (when proxy-was-off
@@ -1532,8 +1537,7 @@ package-install 手动重试即可。"
 (defun clw/update-packages ()
   "更新所有包：刷新源 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
 
-`clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如
-yynt、project-x）装完后不会自动升级，本命令补上更新通道：
+`clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如 project-x）装完后不会自动升级，本命令补上更新通道：
 1. `package-refresh-contents' 刷新源索引；
 2. `package-upgrade-all' 升级全部已安装的 ELPA 包；
 3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包。
@@ -1587,15 +1591,19 @@ yynt、project-x）装完后不会自动升级，本命令补上更新通道：
           ;;(tetosave :url "https://github.com/yyelpa/tetosave") ; 自动保存
           ;;(consult-everything :url "https://github.com/jthaman/consult-everything")
           ;;(wgsl-ts-mode :url "https://github.com/acowley/wgsl-ts-mode")
-          (yynt :url "https://github.com/include-yy/yynt")
           (persistent-cached-load-filter
            :url "https://github.com/include-yy/persistent-cached-load-filter")
           (project-x :url "https://github.com/vmargb/project-x")
           )
         )
 
-(when (clw/package-missing-p)
-  (clw/install-packages))
+;; 包自动安装移到 startup 末尾：此时 after-init-time 已设置，
+;; install/refresh 内部的 package-initialize 不会再触发
+;; "Unnecessary call" 警告（init 阶段调用会触发）
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (when (clw/package-missing-p)
+              (clw/install-packages))))
 ;;@@ theme
 (use-package doom-themes
   :functions clw/load-theme
@@ -1643,20 +1651,30 @@ yynt、project-x）装完后不会自动升级，本命令补上更新通道：
   :config
   (clw/add-to-group 'ffip-find-executable)
   (clw/add-to-group 'ffip-use-rust-fd))
-;;@@WINUM 窗口间跳转
-(use-package winum
-  :defer t
-  :hook (after-init . winum-mode)
+;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
+(use-package ace-window
+  :bind (("M-o" . ace-window)
+         ("C-x o" . ace-window))
+  :custom
+  (aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l)) ; 标号用 home row 字母
+  (aw-scope 'frame))                      ; 只在当前 frame 内选窗
+
+;;@@PULSAR 跳转后脉冲高亮当前行（ace-window/consult/next-error 的视觉反馈）
+(use-package pulsar
+  :hook ((consult-after-jump . pulsar-recenter-top)  ; consult 跳转后置顶并显示
+         (consult-after-jump . pulsar-reveal-entry)
+         (imenu-after-jump . pulsar-recenter-top)
+         (imenu-after-jump . pulsar-reveal-entry)
+         (next-error . pulsar-pulse-line))           ; M-g n/p 等跳转后脉冲
+  :custom
+  (pulsar-face 'pulsar-magenta)           ; 脉冲颜色
+  (pulsar-highlight-face 'pulsar-yellow)  ; 非脉冲场景的高亮颜色
   :config
-  (set-face-attribute 'winum-face nil
-                      :foreground "DeepPink"
-                      :underline "DeepPink"
-                      :weight 'bold)
-  (winum-set-keymap-prefix (kbd "C-c"))
-  ;; 数字绑定在 winum-base-map 子表里（winum-keymap 外层只有 C-c 入口，
-  ;; 直接删外层是无效的）；选窗统一走 C-c ` + 数字（² 是 by-number 的重复键，一并删）
-  (dolist (k '("²" "0" "1" "2" "3" "4" "5" "6" "7" "8" "9"))
-    (define-key winum-base-map (kbd k) nil)))
+  ;; 在内置默认触发列表上追加自己的常用跳转命令
+  (add-to-list 'pulsar-pulse-functions 'ace-window)
+  (add-to-list 'pulsar-pulse-functions 'outline-next-visible-heading)
+  (add-to-list 'pulsar-pulse-functions 'outline-previous-visible-heading)
+  (pulsar-global-mode 1))
 ;;@@PYIM elisp 实现的中文输入法
 (use-package pyim
   :init (setopt default-input-method "pyim")
@@ -2270,7 +2288,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
     "4" #'other-window-prefix
     "5" #'other-frame-prefix
     "6" #'other-tab-prefix
-    "o" #'other-window-prefix)        ; 未装 ace-window，暂用 other-window-prefix 代替
+    "o" #'ace-window)                 ; ace-window：字母选窗后执行默认动作
 
   ;; 占位命令：实际行为由下方 around 钩子决定（这样能借 last-command-event 拿到所按的键）
   (defun clw/embark-prefix-window ()
@@ -2587,6 +2605,20 @@ Combines project-x's session label display with the built-in
   "Open my init file"
   (interactive)
   (find-file (expand-file-name "init.el" user-emacs-directory)))
+
+;;@@ 禁用命令的快捷键清理
+;; Emacs 官方禁用了一批新手易混淆的命令，但默认键位仍占用 C-x 前缀空间。
+;; 确认不需要后在此列出，启动时自动解除其默认快捷键（命令本身仍可 M-x 调用）。
+(defconst clw/unbind-disabled-commands
+  '(scroll-left set-goal-column upcase-region downcase-region narrow-to-page)
+  "要解除默认快捷键的禁用命令列表。")
+
+(defun clw/unbind-disabled-commands ()
+  "解除 `clw/unbind-disabled-commands' 中所有命令的默认快捷键。"
+  (dolist (cmd clw/unbind-disabled-commands)
+    (dolist (key (where-is-internal cmd))
+      (global-unset-key key))))
+(add-hook 'emacs-startup-hook #'clw/unbind-disabled-commands)
 
 ;;@@ 增强 C-x <num> 系列的 Window 管理功能
 (defun clw/split-and-move-to-other-window (fun)

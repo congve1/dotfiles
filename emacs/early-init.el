@@ -11,7 +11,11 @@
 (require 'cl-lib)
 
 (setq load-prefer-newer t)
-(setq package-enable-at-startup nil)
+;; package-enable-at-startup 保持默认 t：startup 会在读入 init 前自动初始化
+;; 包系统（package-quickstart t 时走 quickstart 快速路径）。此前设为 nil 会导致
+;; init.el 需手动 package-initialize，进而触发 "Unnecessary call" 警告，
+;; 且 diminish 等早加载包在初始化前 require 会报 Cannot open load file。
+
 ;; 把 ~50 个包的 autoload 合并进一个 quickstart 文件，显著减少启动期文件 IO。
 ;; 注意：增删包后需刷新缓存（已在 `clw/install-packages' 收尾自动做）；
 ;; 手动装包后可运行 M-x package-quickstart-refresh。
