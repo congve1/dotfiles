@@ -31,7 +31,7 @@ unsetopt beep
 COMPLETION_WAITING_DOTS="true"
 ENABLE_CORRECTION="true"
 
-# OMZ 公共库（去掉 completion.zsh —— compinit 统一由下方 fast-syntax-highlighting 入口执行）
+# OMZ 公共库（去掉 completion.zsh —— compinit 统一由下方 zsh-syntax-highlighting 入口执行）
 zinit lucid for OMZ::lib/key-bindings.zsh
 zinit wait lucid for \
     OMZ::lib/git.zsh \
@@ -42,14 +42,13 @@ zinit wait lucid for \
     OMZ::plugins/git/git.plugin.zsh \
     OMZ::plugins/git-extras/git-extras.plugin.zsh
 
-# 补全源：只注册，不跑 compinit（全 shell 唯一的 compinit 在 fast-syntax-highlighting 的 atinit 里）
+# 补全源：只注册，不跑 compinit（全 shell 唯一的 compinit 在 zsh-syntax-highlighting 的 atinit 里）
 zinit wait lucid blockf for zsh-users/zsh-completions
 
-# fast-syntax-highlighting（唯一 compinit 入口）
+# zsh-syntax-highlighting（唯一 compinit 入口；轻量版，WSL 下每键开销小）
 zinit wait"0" lucid for \
     atinit"ZINIT[COMPINIT_OPTS]=-C; zicompinit; zicdreplay" \
-    atload"FAST_HIGHLIGHT[chroma-git]=0" \
-    zdharma-continuum/fast-syntax-highlighting
+    zsh-users/zsh-syntax-highlighting
 
 # zsh-autosuggestions 幽灵提示已停用（用 fzf Ctrl+R 搜历史替代）。
 # 想恢复时取消下面三行注释即可（atload 必须紧贴插件上一行）：
@@ -167,20 +166,36 @@ alias emacs-cli="$EDITOR"
 # ==============================================================================
 # 系统PATH与第三方工具初始化
 # ==============================================================================
+
 export PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
 [[ -d "$HOME/.cargo/bin" ]] && export PATH="$HOME/.cargo/bin:$PATH"
-# 判断 go 是否存在，并把 GOBIN 幂等地加进 PATH
+# 判断 go 是否存在，并把 GOBIN 幂等地加进 PATH（go env 结果缓存，避免每次启动拉起 Go 工具链）
 if command -v go >/dev/null 2>&1; then
-  gobin="$(go env GOBIN)"
-  [ -n "$gobin" ] || gobin="$(go env GOPATH | cut -d: -f1)/bin"
-
+  gobin_cache="$HOME/.cache/go-bin-path"
+  if [[ ! -f $gobin_cache ]]; then
+    mkdir -p "$HOME/.cache"
+    { gobin="$(go env GOBIN)"
+      [ -n "$gobin" ] || gobin="$(go env GOPATH | cut -d: -f1)/bin"
+      print -r -- "$gobin"; } > "$gobin_cache"
+  fi
+  gobin="$(<$gobin_cache)"
   case ":$PATH:" in
     *":$gobin:"*) ;;                    # 已在 PATH 中，什么都不做
     *) export PATH="$gobin:$PATH" ;;    # 加入 PATH（放前面优先）
   esac
-  unset gobin
+  unset gobin gobin_cache
 fi
+
+# usm（usmsso）：目录存在才加进 PATH，且避免重复追加；放 PATH 末尾防遮蔽系统命令
+usm_bin="$HOME/.ssh/usm"
+if [[ -d $usm_bin ]]; then
+  case ":$PATH:" in
+    *":$usm_bin:"*) ;;                 # 已存在，跳过
+    *) export PATH="$PATH:$usm_bin" ;; # 追加到末尾
+  esac
+fi
+unset usm_bin
 
 # ==============================================================================
 # 常用别名与函数
@@ -219,5 +234,15 @@ fi
 [[ -f ${HOME}/.zsh_funcs/p.zsh ]] && source ${HOME}/.zsh_funcs/p.zsh
 
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# 懒加载 nvm：首次调用 nvm/node/npm/npx 时才真正 source nvm.sh（省 300~800ms 启动）
+_lazy_nvm() {
+  local cmd=$1
+  shift
+  unfunction _lazy_nvm nvm node npm npx
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+  "$cmd" "$@"    # nvm 为 nvm.sh 定义的函数，node/npm/npx 为 PATH 中二进制
+}
+nvm()  { _lazy_nvm nvm "$@"; }
+node() { _lazy_nvm node "$@"; }
+npm()  { _lazy_nvm npm "$@"; }
+npx()  { _lazy_nvm npx "$@"; }
