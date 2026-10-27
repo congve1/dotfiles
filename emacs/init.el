@@ -1683,7 +1683,7 @@ package-install 手动重试即可。"
   (use-package pyim-basedict)
   (use-package popup)
   (pyim-basedict-enable)
-  (pyim-default-scheme 'xiaohe-shuangpin))
+  (pyim-default-scheme 'microsoft-shuangpin))
 ;;@@ VERTICO 更好的 icomplete 和 ido
 (use-package vertico
   :config
