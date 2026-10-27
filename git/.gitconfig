@@ -1,0 +1,77 @@
+# ==============================================================================
+# Git 配置（stow 包：git/.gitconfig → ~/.gitconfig）
+# 安装：stow_install git
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 身份（按需取消注释填写；也可用 git config --global user.name/email 设置）
+# ------------------------------------------------------------------------------
+# [user]
+#     name = clw
+#     email = clw@ustb.edu.cn
+
+# ------------------------------------------------------------------------------
+# 基础行为
+# ------------------------------------------------------------------------------
+[init]
+    defaultBranch = main
+[push]
+    default = simple
+[fetch]
+    prune = true                  # fetch 时自动清理远端已删分支
+[pull]
+    rebase = true                 # pull 默认 rebase，保持线性历史
+[rebase]
+    autoStash = true              # rebase 前自动 stash，完成后恢复
+    autosquash = true             # fixup!/squash! 提交自动整理
+[core]
+    autocrlf = input             # 提交转 LF，checkout 不转换（跨 Windows/WSL 防 ^M）
+    pager = less -R
+[diff]
+    colorMoved = default          # 移动的代码块着色显示
+[merge]
+    conflictstyle = zdiff3        # 冲突标记更清晰（显示共同祖先）
+
+# ------------------------------------------------------------------------------
+# 常用别名
+# ------------------------------------------------------------------------------
+[alias]
+    # ---- 状态与查看 ----
+    st   = status -sb             # 短格式状态
+    df   = diff                   # 工作区差异
+    dc   = diff --cached          # 暂存区差异
+    lg   = log --oneline --graph --decorate --all -30
+    last = log -1 HEAD --stat     # 上次提交详情
+    root = rev-parse --show-toplevel
+    aliases = config --get-regexp '^alias\\.'
+
+    # ---- 提交 ----
+    ci   = commit
+    ca   = commit --amend
+    cane = commit --amend --no-edit
+    undo = reset --soft HEAD~1    # 撤销上次提交（保留改动进暂存区）
+
+    # ---- 分支与切换 ----
+    br   = branch
+    sw   = switch
+    co   = checkout
+    unstage = restore --staged    # 取消暂存
+    discard = restore             # 丢弃工作区改动（小心用）
+
+    # ---- 变基 ----
+    rb  = rebase
+    rba = rebase --abort
+    rbc = rebase --continue
+
+    # ---- 同步 ----
+    pl  = pull
+    pf  = push --force-with-lease # 比 --force 安全的强推
+    up  = !git pull --rebase --autostash && git status -sb
+
+# ------------------------------------------------------------------------------
+# GPG 提交签名（密钥配好后取消注释）
+# ------------------------------------------------------------------------------
+# [commit]
+#     gpgsign = true
+# [user]
+#     signingkey = <主密钥ID或子密钥ID>

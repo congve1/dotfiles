@@ -185,10 +185,12 @@ stow_emacs() {
 
 stow_install_all() {
     stow_install zsh
+    stow_install git
     stow_emacs
 }
 
 stow_update_all() {
     stow_update zsh
+    stow_update git
     stow_emacs update
 }
