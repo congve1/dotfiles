@@ -222,9 +222,9 @@ alias serve='python3 -m http.server 8000'
 
 # ---------- WSL 专属（自动检测，Windows/真机里不生效） ----------
 if grep -qi microsoft /proc/version 2>/dev/null; then
-    alias expl='explorer.exe .'          # 资源管理器打开当前目录
-    alias clip='clip.exe'                # 管道进 Windows 剪贴板：cat file | clip
-    alias open='explorer.exe'            # open xxx 用 Windows 打开文件/URL
+    alias expl='/mnt/c/Windows/explorer.exe .'
+    alias clip='/mnt/c/Windows/System32/clip.exe'
+    alias open='/mnt/c/Windows/explorer.exe'
 fi
 
 # ==============================================================================
