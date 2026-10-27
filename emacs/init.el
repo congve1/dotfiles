@@ -1436,6 +1436,7 @@ Lisp function does not specify a special indentation."
           ;;cnfonts ; 中英文字体对其，通过 `cnfonts-edit-profile' 进行设定
           ace-window ; 窗口字母标号跳转（M-o，替代 winum）
           pulsar ; 跳转后脉冲高亮当前行
+          ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
           avy ; 快速跳转（M-j 输入字符序列跳转）
           pyim ; 拼音输入法
           pyim-basedict ; pyim 依赖项
@@ -1496,7 +1497,8 @@ Run after changing `package-selected-packages' or `package-vc-selected-packages'
 
 单包用 condition-case 兜底，避免 Emacs master 上 tar-mode cl-assert
 （bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
-package-install 手动重试即可。"
+package-install 手动重试即可。有失败包时会自动刷新索引并重试一次（新上架
+包可能不在本地索引缓存里）。"
   (interactive)
   ;; 兜底初始化（仅未初始化时调用；已初始化时再调会触发
   ;; "Unnecessary call to package-initialize" 警告）
@@ -1516,6 +1518,18 @@ package-install 手动重试即可。"
                 (error
                  (push (cons pkg err) failed-packages)
                  (message "[clw] Package %s install failed: %S" pkg err)))))
+          ;; 失败包大多是新上架包不在本地索引缓存里：刷新索引后重试一次
+          (when failed-packages
+            (package-refresh-contents)
+            (dolist (entry failed-packages)
+              (let ((pkg (car entry)))
+                (condition-case err
+                    (progn
+                      (package-install pkg)
+                      (setq failed-packages (delq entry failed-packages))
+                      (message "[clw] 重试成功: %s" pkg))
+                  (error
+                   (message "[clw] 重试仍失败: %s (%S)" pkg err))))))
           (condition-case err
               (package-vc-install-selected-packages)
             (error
@@ -1675,6 +1689,28 @@ package-install 手动重试即可。"
   (add-to-list 'pulsar-pulse-functions 'outline-next-visible-heading)
   (add-to-list 'pulsar-pulse-functions 'outline-previous-visible-heading)
   (pulsar-global-mode 1))
+
+;;@@GHOSTEL 基于 Ghostty VT 引擎的终端模拟器（Windows 原生可用，预编译模块自动下载）
+(use-package ghostel
+  :bind (("C-x m" . ghostel)               ; 打开终端（compose-mail 未使用，安全接管）
+         :map ghostel-semi-char-mode-map
+         ("C-s" . consult-line)            ; 终端内复用 consult 搜索
+         ("M-p" . (lambda () (interactive) (ghostel-send-key "p" "ctrl"))) ; eshell 式上一条
+         ("M-n" . (lambda () (interactive) (ghostel-send-key "n" "ctrl"))) ; eshell 式下一条
+         :map project-prefix-map
+         ("m" . ghostel-project)           ; C-x p m 当前项目开终端
+         ("M" . ghostel-project-list-buffers))
+  :config
+  (defun clw/ghostel-send-C-k-and-kill ()
+    "Emacs 式 C-k：行尾内容进 kill-ring，同时发送 C-k 给终端。"
+    (interactive)
+    (kill-ring-save (point) (line-end-position))
+    (ghostel-send-key "k" "ctrl"))
+  (define-key ghostel-semi-char-mode-map (kbd "C-k") #'clw/ghostel-send-C-k-and-kill)
+  ;; shell 里 ghostel_cmd 可调回 Emacs 执行命令（需在 bashrc 判 INSIDE_EMACS）
+  (add-to-list 'ghostel-eval-cmds '("magit-status-setup-buffer" magit-status-setup-buffer))
+  (add-to-list 'project-switch-commands '(ghostel-project "Ghostel") t)
+  (add-to-list 'project-switch-commands '(ghostel-project-list-buffers "Ghostel buffers") t))
 ;;@@PYIM elisp 实现的中文输入法
 (use-package pyim
   :init (setopt default-input-method "pyim")
