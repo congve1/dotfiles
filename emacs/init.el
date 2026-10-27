@@ -362,9 +362,9 @@ If in WSL, try to get gateway via system commands."
     (let ((keymap (copy-keymap orig-keymap)))
       (setq which-key-persistent-popup t)        ; 让面板常驻：禁用 which-key 自动隐藏
       (set-transient-map keymap t
-        (lambda ()
-          (setq which-key-persistent-popup nil)  ; 退出时恢复自动隐藏
-          (which-key--hide-popup)))              ; 并关闭面板（勿用 which-key-abort，会 quit）
+                         (lambda ()
+                           (setq which-key-persistent-popup nil)  ; 退出时恢复自动隐藏
+                           (which-key--hide-popup)))              ; 并关闭面板（勿用 which-key-abort，会 quit）
       (which-key--create-buffer-and-show nil keymap))))
 
 ;;@@ 设置窗口整体透明度为 0.65
@@ -676,24 +676,24 @@ If in WSL, try to get gateway via system commands."
           (?C . (:foreground "green" :weight bold)))
         org-capture-templates
         '(          ("t" "Todo"    entry (file "gtd.org")
-           "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
-           :clock-in t :clock-resume t)
-          ;; capture 时直接设定截止时间（%^{Deadline}t 会弹日历窗选日期）
-          ("d" "Todo+Deadline" entry (file "gtd.org")
-           "* TODO %?\nDEADLINE: %^{Deadline}t\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
-           :clock-in t :clock-resume t)
-          ;; 带起止时间的日程事件：%^{日期}T 选日期+开始时刻，-%^{结束时间} 补结束时刻
-          ("e" "Event" entry (file "gtd.org")
-           "* %^{事件名}\n<%^{日期}T-%^{结束时间}>\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
-          ("n" "Note"    entry (file "notes.org")
-           "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
-          ("i" "Idea"    entry (file "idea.org")
-           "* %^{Title}\n:PROPERTIES:\n:CREATED: %U\n:END:\n%?\n")
-          ("j" "Journal" entry (file+olp+datetree "journal.org")
-           "* %^{Title} %?\n%U\n"
-           :clock-in t :clock-resume t)
-          ("b" "Book"    entry (file+olp+datetree "book.org")
-           "* Topic: %^{Description}  %^g %?\nAdded: %U")))
+                     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
+                     :clock-in t :clock-resume t)
+                    ;; capture 时直接设定截止时间（%^{Deadline}t 会弹日历窗选日期）
+                    ("d" "Todo+Deadline" entry (file "gtd.org")
+                     "* TODO %?\nDEADLINE: %^{Deadline}t\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n"
+                     :clock-in t :clock-resume t)
+                    ;; 带起止时间的日程事件：%^{日期}T 选日期+开始时刻，-%^{结束时间} 补结束时刻
+                    ("e" "Event" entry (file "gtd.org")
+                     "* %^{事件名}\n<%^{日期}T-%^{结束时间}>\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
+                    ("n" "Note"    entry (file "notes.org")
+                     "* %? :NOTE:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n")
+                    ("i" "Idea"    entry (file "idea.org")
+                     "* %^{Title}\n:PROPERTIES:\n:CREATED: %U\n:END:\n%?\n")
+                    ("j" "Journal" entry (file+olp+datetree "journal.org")
+                     "* %^{Title} %?\n%U\n"
+                     :clock-in t :clock-resume t)
+                    ("b" "Book"    entry (file+olp+datetree "book.org")
+                     "* Topic: %^{Description}  %^g %?\nAdded: %U")))
   ;; 新版 org 已将 elisp 语言正名为 emacs-lisp（旧名 elisp 是其别名），
   ;; 对旧名 setq 会在 org 加载时被 defvaralias 覆盖并报 warning，
   ;; 且赋值丢失，故必须写新名
@@ -825,12 +825,12 @@ If in WSL, try to get gateway via system commands."
 (add-hook 'emacs-startup-hook
           (lambda ()
             (run-with-idle-timer 2 nil
-              (lambda ()
-                (require 'org-agenda)    ; 级联加载 org + babel 语言 + tempo
-                (dolist (f (org-agenda-files))
-                  (when (and (stringp f) (file-exists-p f))
-                    (with-current-buffer (find-file-noselect f)
-                      (kill-buffer)))))))) ; 打开即关，触发 org-mode 模块加载链
+                                 (lambda ()
+                                   (require 'org-agenda)    ; 级联加载 org + babel 语言 + tempo
+                                   (dolist (f (org-agenda-files))
+                                     (when (and (stringp f) (file-exists-p f))
+                                       (with-current-buffer (find-file-noselect f)
+                                         (kill-buffer)))))))) ; 打开即关，触发 org-mode 模块加载链
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
@@ -1285,7 +1285,7 @@ If in WSL, try to get gateway via system commands."
   (enable-recursive-minibuffers t)
   (inhibit-message-regexps (append inhibit-message-regexps
                                    '("^Saving file" "^Wrote" "^Indentation setup for shell")))
- (set-message-functions '(inhibit-message))
+  (set-message-functions '(inhibit-message))
   :init (minibuffer-depth-indicate-mode)
   :config
   ;; minibuffer 输入时抑制 `message' 回显，避免后台消息打断/覆盖正在输入的内容
@@ -1696,9 +1696,9 @@ package-install 手动重试即可。"
 (use-package vertico-directory
   :after vertico
   :bind (:map vertico-map
-              ("RET" . vertico-directory-enter)
-              ("DEL" . vertico-directory-delete-char)
-              ("M-DEL" . vertico-directory-delete-word))
+         ("RET" . vertico-directory-enter)
+         ("DEL" . vertico-directory-delete-char)
+         ("M-DEL" . vertico-directory-delete-word))
   :hook (rfn-eshadow-update-overlay . vertico-directory-tidy))
 ;;@@ marginalia
 (use-package marginalia
@@ -2162,8 +2162,8 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ;; 指示器：minimal 在回显区显示当前 target 类别；highlight 高亮 target；
   ;; isearch 在增量搜索时高亮 target
   (embark-indicators '(embark-minimal-indicator
-                        embark-highlight-indicator
-                        embark-isearch-highlight-indicator))
+                       embark-highlight-indicator
+                       embark-isearch-highlight-indicator))
   (embark-cycle-key ".")            ; 动作菜单里循环切换不同 target 的键
   (embark-help-key "?")             ; 查看完整动作 keymap 的帮助键
   :config
@@ -2299,7 +2299,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
       (&rest rest &key run type &allow-other-keys)
     "先执行 `clw/window-prefix-map' 中所按前缀键对应的命令，再执行该 type 的默认动作。"
     (when-let* ((cmd (keymap-lookup clw/window-prefix-map
-                                  (key-description `[,last-command-event]))))
+                                    (key-description `[,last-command-event]))))
       (funcall cmd))
     (plist-put rest :action (embark--default-action type))
     (apply run rest))
