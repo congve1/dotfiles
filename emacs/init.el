@@ -13,10 +13,6 @@
   (eq system-type 'gnu/linux)
   "Are we running on a GNU/Linux system?")
 
-(defconst sys/macp
-  (eq system-type 'darwin)
-  "Are we running on a Mac system?")
-
 (defun is-wsl-p ()
   "Return non-nil if running in WSL."
   (and (eq system-type 'gnu/linux)
@@ -63,8 +59,6 @@
 (when (version< emacs-version "30.1")
   (error "init.el: emacs version must >= 30.1"))
 ;;@@ Emacs 31 新特性，缓存 load-path 加快加载速度，大约提升 15%
-;; (when (boundp 'load-path-filter-function)
-;;   (setq load-path-filter-function #'load-path-filter-cache-directory-files))
 ;; 通过设定 `load-suffixes' / `load-file-rep-suffixes' 减小搜索项数量也能带来
 ;; 类似提升，但在提交上述补丁后收益不大（已验证，原死代码块已删除）：
 ;; https://emacs-china.org/t/windows-dev-drive-emacs/29362/22
@@ -84,10 +78,6 @@
   (let ((args (if (plist-get args :group) args
                 (cons :group (cons ''clw args)))))
     `(defcustom ,symbol ,value ,doc ,@args))
-  )
-(defun clw/add-to-group (sym)
-  "添加某一option到clw group中，方便显示"
-  (custom-add-to-group 'clw sym 'custom-variable)
   )
 (defun clw/customize ()
   (interactive)
@@ -127,8 +117,6 @@
 (setopt completions-detailed t)
 ;; Emacs 29 提供了许多不错的补全改进
 ;; 但是，我们现在有超级好用的 vectico 了，不过加上也不费事
-;; https://www.scss.tcd.ie/~sulimanm/posts/default-emacs-completion.html
-;; https://robbmann.io/posts/emacs-29-completions/
 (setopt completions-format 'one-column) ; 在补全 buffer 中单列显示候选词
 (setopt completions-header-format nil)  ; 补全 buffer 中不显示汇总信息
 (setopt completions-max-height 20)      ; 补全 buffer 限高为 20 行
@@ -156,12 +144,14 @@
 (bind-key "C-x s" #'clw/save-some-buffers)
 ;;@@ 设置默认的 major-mode 为 `text-mode'
 (setq-default major-mode 'text-mode)
-;;@@ 从子进程读取输出时的最大单次 thunk 读取字节数量，设置为 1MB
+;;@@ 从子进程读取输出时的最大单次 thunk 读取字节数量，设置为 4MB
 ;; (setq process-adaptive-read-buffering nil)
 (setq read-process-output-max (* 4 1024 1024))
 ;;@@ 单次滚动设置为 1 行
 (setopt scroll-step 1)
 (setopt scroll-conservatively 10000)
+;; 光标在行尾时保持在行尾，行尾追加内容不跳列
+(setopt track-eol t)
 ;;@@ 添加一些全局绑定
 (bind-keys
  ;; 正则向前和向后搜索的快捷键
@@ -192,15 +182,30 @@
 (setq-default bidi-inhibit-bpa t)
 (setq-default cursor-in-non-selected-windows nil)
 (setopt fast-but-imprecise-scrolling t)
+;; redisplay-skip-fontification-on-input（Emacs 28+）：输入时跳过 fontification；
+;; long-line-threshold / large-hscroll-threshold（Emacs 29+）：超长行/水平滚动走快速路径
+(when (boundp 'redisplay-skip-fontification-on-input)
+  (setopt redisplay-skip-fontification-on-input t))
+(when (boundp 'long-line-threshold)
+  (setopt long-line-threshold 1000
+          large-hscroll-threshold 1000))
+;; 输入时延迟 fontification 到空闲，打字更流畅
+(setopt jit-lock-defer-time 0.25)
+(setopt jit-lock-stealth-time 0.5)
 (global-so-long-mode 1)
 ;;@@ 让 so-long 在长行文件中也禁用我们通过 prog-mode-hook 加的 heavy minor-mode
 (with-eval-after-load 'so-long
-  (dolist (mode '(puni-mode symbol-overlay-mode treesit-auto-mode
+  (dolist (mode '(puni-mode symbol-overlay-mode
                             corfu-mode apheleia-mode
                             display-fill-column-indicator-mode))
     (add-to-list 'so-long-minor-modes mode)))
 ;;@@ kill 时若与 kill-ring 内最后内容重复则不添加入 kill-ring
 (setopt kill-do-not-save-duplicates t)
+;; C-k 在行首时连同换行符删除整行（否则只删到行尾、保留换行）
+(setopt kill-whole-line t)
+;; Emacs 31+：C-w 在无 region 时按 Emacs 单词规则向后删除一个词
+(when (boundp 'kill-region-dwim)
+  (setopt kill-region-dwim 'emacs-word))
 
 ;;@@ 将大文件警告提升至大约 100MB
 (setopt large-file-warning-threshold (* 100 1024 1024))
@@ -210,6 +215,8 @@
         '(read-only t cursor-intangible t face minibuffer-prompt))
 ;;@@ 默认 80 的 fill-column
 (setopt fill-column 80)
+;; 中文按"词类"断行，避免把词拆到两行（org/文本写作体验更好）
+(setopt word-wrap-by-category t)
 
 ;;@@ 解锁一些被禁用的命令
 (put 'list-timers 'disabled nil)
@@ -232,13 +239,21 @@
   ;;(setq w32-pass-rwindow-to-system nil)
   ;;(setq w32-rwindow-modifier 'super)
   (setq w32-apps-modifier 'hyper)
+  ;; find-file 时不再查询真实文件属性（硬链接数等），减少文件系统调用
+  (setq w32-get-true-file-attributes nil)
+  ;; 管道读取不延迟
+  (setq w32-pipe-read-delay 0)
   ;; 默认的 4KB 管道 buffer 太小了点，给到 64KB
   (setq w32-pipe-buffer-size (* 64 1024))
   ;; 在 Windows 上没必要搜索两遍 auto-mode-alist，
   ;; 因为 Windows 文件系统忽略大小写
   (setopt auto-mode-case-fold nil)
   ;; tooltip-mode 在 Windows 下似乎有点卡
-  (tooltip-mode -1))
+  (tooltip-mode -1)
+  ;; exec-path 去重并去掉末尾斜杠，避免同一目录被扫描两遍。
+  ;; 不缩窄 exec-suffixes（原优化想删 .com/.cmd）：npm 系工具在 Windows
+  ;; 上是 .cmd shim，缩窄后 eglot 会找不到 eslint/tsc 等
+  (setq exec-path (delete-dups (mapcar #'directory-file-name exec-path))))
 
 ;;@@ LINUX 额外的执行路径，（如果没有添加到 $PATH 的话）
 ;; 添加 ~/.local/bin 到 exe-path
@@ -259,6 +274,39 @@
 (when (and sys/win32p (executable-find "bash"))
   (setopt shell-file-name "bash")
   (setopt shell-command-switch "-c"))
+
+;;@@ EXECUTABLE-FIND 缓存查找结果，避免重复扫描 exec-path
+;; magit/eglot/compile 等频繁调用 `executable-find'，每次都按
+;; exec-path × exec-suffixes 逐目录探测，Windows 上开销明显。
+(defvar clw/executable-find-cache (make-hash-table :test 'equal :size 100))
+(defvar clw/executable-find-cache-miss (make-symbol "miss"))
+
+(defun clw/executable-find-clear-cache ()
+  "清空 `executable-find' 查找缓存。
+PATH / exec-path 变化或新装程序后调用。"
+  (interactive)
+  (clrhash clw/executable-find-cache))
+
+(define-advice executable-find
+    (:around (orig-fun command &optional remote) clw/executable-find-cache-advice)
+  "本地查找结果缓存进 `clw/executable-find-cache'。
+remote 查找不缓存；buffer-local `exec-path'（envrc、python venv 等
+会改写它）也不缓存，否则会拿到别的环境的查找结果。"
+  (if (or remote (local-variable-p 'exec-path))
+      (funcall orig-fun command remote)
+    (let ((cached (gethash command clw/executable-find-cache
+                           clw/executable-find-cache-miss)))
+      (if (eq cached clw/executable-find-cache-miss)
+          (puthash command (funcall orig-fun command) clw/executable-find-cache)
+        cached))))
+
+;;@@ FIND-FILE 提速：跳过 VC 状态刷新
+;; `vc-refresh-state' 每次 find-file 都对 git 仓库里的文件同步跑一次
+;; git status（Windows 上几十 ms）。移除后该开销转移到 diff-hl 的
+;; idle 异步更新里，不再阻塞打开文件。
+;; 代价：doom-modeline 的 vcs segment 依赖它设置的 `vc-mode'，新打开的
+;; 文件在首次 auto-revert 触发前不显示分支；想恢复分支显示就注释掉这行。
+(remove-hook 'find-file-hook #'vc-refresh-state)
 
 ;;@@ clash
 ;; 辅助函数，获取网关地址，方便wsl使用
@@ -387,12 +435,11 @@ If in WSL, try to get gateway via system commands."
 (setopt package-archive-priorities
         '(("gnu" . 3) ("nongnu" . 2) ("melpa" . 1)))
 ;;@@ use-package
-(setq use-package-enable-imenu-support t)
 (setq use-package-expand-minimally t)
 ;; 关闭 use-package 统计以减少加载开销；分析启动耗时可临时设为 t
 (setq use-package-compute-statistics nil)
-;; package-initialize 不在此处调用：Emacs 27+ 启动时自动初始化（early-init
-;; 已设 quickstart t + enable-at-startup nil），显式调用会触发
+;; package-initialize 不在此处调用：启动时包系统自动初始化（early-init
+;; 保持 enable-at-startup 默认 t，并启用 quickstart），显式调用会触发
 ;; "Unnecessary call to package-initialize" 警告；
 ;; 完整初始化兜底已移入 clw/install-packages。
 (require  'use-package)
@@ -432,6 +479,17 @@ If in WSL, try to get gateway via system commands."
   :defer t
   :config
   (setopt eshell-scroll-show-maximum-output nil))
+;;@@COMINT 剥离 Windows 程序输出中混入的 \r（WSL interop 跑 .exe 时常见）
+(add-hook 'comint-output-filter-functions #'comint-strip-ctrl-m)
+;;@@WGREP grep 结果缓冲区直接编辑替换，改完自动写回文件
+(use-package wgrep
+  :defer t
+  :custom
+  (wgrep-auto-save-buffer t)
+  (wgrep-change-readonly-file t))
+;;@@GOTO-ADDRESS 注释/字符串中的 URL 可点击
+(use-package goto-addr
+  :hook (prog-mode . goto-address-prog-mode))
 ;;@@UNIQUIFY 路径名显示唯一化
 (setopt uniquify-buffer-name-style 'reverse
         uniquify-separator " ← "
@@ -886,8 +944,7 @@ If in WSL, try to get gateway via system commands."
              try-expand-dabbrev-from-kill)))
 ;;@@ TREESIT 基于语法树的 PL 前端工具
 (use-package treesit
-  :when (and (fboundp 'treesit-available-p)
-             (treesit-available-p))
+  :when (treesit-available-p)
   :custom
   ;; 只 remap 已安装 grammar 的语言：跨平台时（如 WSL 里新装的 Emacs）缺
   ;; 某个 grammar 不至于打开文件就报 "No tree-sitter grammar"。
@@ -956,6 +1013,12 @@ If in WSL, try to get gateway via system commands."
 (use-package project
   :bind ("C-x p C-b" . yy/project-list-buffers)
   :config
+  ;; VC 检索/文件列表时忽略这些目录
+  (setopt project-vc-ignores
+          '("node_modules" "target" "dist" "build" "__pycache__" ".venv"))
+  ;; .git 之外的额外项目根标记
+  (setopt project-vc-extra-root-markers
+          '(".dir-locals.el" "Cargo.toml" "go.mod" "package.json"))
   ;; 使用 ibuffer 显示属于当前项目的文件
   ;; 可通过 `g' 键更新 ibuffer
   (defun yy/project-list-buffers (&optional arg)
@@ -975,18 +1038,6 @@ If in WSL, try to get gateway via system commands."
 (setopt auto-revert-interval 10)
 (setopt auto-revert-avoid-polling nil)
 (global-auto-revert-mode)
-;;@@FILESETS 可用于保存一系列常用的文件，方便打开
-;;te 添加一组自己常用的文件来让 emacs 启动时自动打开
-;; 使用 `filesets-add-buffer' 添加 buffer 到 group 中
-;; 使用 `filesets-edit' 来编辑 filesets group
-(use-package filesets
-  :disabled
-  :config
-  ;;(filesets-init)
-  ;; 默认在启动时打开的一组 buffer，它们一般平时很有用
-  (when (filesets-get-fileset-from-name "FREQ")
-    (with-eval-after-load 'init
-      (filesets-open nil "FREQ"))))
 ;;@@WINDMOVE 提供根据位置在 window 间移动 point 的方法
 (use-package windmove
   :init
@@ -1023,6 +1074,14 @@ If in WSL, try to get gateway via system commands."
           (cons 'flymake-eldoc-function
                 (delq 'flymake-eldoc-function
                       eldoc-documentation-functions)))))
+;; elisp flymake 的字节编译检查只在 git 仓库内启用，
+;; 避免零散 el 文件（不在版本库中）触发无意义的编译检查。
+;; 注意用 :around 报告空结果而非 :before-while 跳过：跳过会让 report-fn
+;; 永远不被调用，flymake 会一直显示 "Waiting for running backend(s)"。
+(define-advice elisp-flymake-byte-compile (:around (orig-fn report-fn &rest args) check-git-repo)
+  (if (locate-dominating-file default-directory ".git")
+      (apply orig-fn report-fn args)
+    (funcall report-fn nil)))
 ;;@@EGLOT
 ;; 加载 eglot
 (use-package eglot
@@ -1065,9 +1124,10 @@ If in WSL, try to get gateway via system commands."
   ;; Windows 官方 Python 只提供 python.exe / py.exe，没有 python3
   (python-shell-interpreter (if sys/win32p "python" "python3"))
   (python-shell-completion-native-enable nil)
-  (python-shell-completion-native-disabled-interpreters
-   '("pypy" "ipython3" "jupyter" "python3"))
   :config
+  ;; Python 3.13 pyrepl 在 comint（TERM=dumb）下对 SIGINT 处理有问题，
+  ;; 强制使用传统 REPL，避免 C-c C-c 中断行为异常
+  (setenv "PYTHON_BASIC_REPL" "1")
   ;; 填充列与 Black/Ruff 默认值一致
   (add-hook 'python-base-mode-hook
             (lambda () (setq-local fill-column 88)))
@@ -1109,7 +1169,6 @@ If in WSL, try to get gateway via system commands."
 ;;@@GO Go 开发环境
 (use-package go-ts-mode
   :config
-  (require 'cl-lib)
   ;; Go 强制使用 tab 缩进（gofmt 要求），覆盖全局的 indent-tabs-mode。
   ;; tab 显示宽 4 列、每级缩进 1 个 tab（= 4 列）。tab-width 必须等于
   ;; go-ts-mode-indent-offset，否则会产生 tab+空格混合（gofmt 不接受）。
@@ -1169,7 +1228,7 @@ If in WSL, try to get gateway via system commands."
                            (with-current-buffer (process-buffer proc)
                              (goto-char (point-max))
                              (insert "\n[done]\n"))))))))))
-  ;;@@ 进入 go-ts-mode 时：先把 GOPATH/bin 纳入 exec-path（无条件，幂等），
+  ;;@@ 进入 go-ts-mode 时：先把 GOPATH/bin 纳入 exec-path/PATH（幂等），
   ;; 再检测/异步安装缺失工具。depth 设负值确保在 eglot-ensure 之前执行，
   ;; 让 exec-path 先就绪，eglot 才能找到 gopls。
   (defun clw/go-ensure-tools ()
@@ -1178,10 +1237,12 @@ If in WSL, try to get gateway via system commands."
       (when-let* ((gopath (or (getenv "GOPATH")
                               (expand-file-name "go" (getenv "HOME"))))
                   (gobin (expand-file-name "bin" gopath)))
-        ;; 无条件加入（幂等；目录尚不存在也无害，首次安装工具后会创建它）
+        ;; exec-path 用 add-to-list 去重；PATH 按条目判重后用 setenv 替换，
+        ;; 避免重复进入 go-ts-mode 时 process-environment 累积多份 PATH。
         (add-to-list 'exec-path gobin)
-        (add-to-list 'process-environment
-                     (concat "PATH=" gobin path-separator (getenv "PATH"))))
+        (let ((path (getenv "PATH")))
+          (unless (member gobin (split-string path path-separator t))
+            (setenv "PATH" (concat gobin path-separator path)))))
       (let ((missing (cl-remove-if
                       (lambda (cell) (executable-find (symbol-name (car cell))))
                       clw/go-tools)))
@@ -1276,6 +1337,42 @@ If in WSL, try to get gateway via system commands."
         (if sys/win32p
             "-laGh1v"
           "-laGh1v --group-directories-first"))
+;; `!' 猜测命令时不再建议外部打开；dired 的 E（dired-do-open）改由
+;; 下面的 clw/open-in-external-app 直接拉起系统默认程序，不经 shell，
+;; 路径带空格/特殊字符也不会被拆词
+(setopt shell-command-guess-open nil)
+
+(defun clw/open-in-external-app (&optional filename)
+  "用系统默认程序打开 FILENAME，缺省取当前文件或 Dired 标记的文件。
+超过 5 个文件时先询问。"
+  (interactive)
+  (let* ((file-list (cond
+                     (filename `(,filename))
+                     ((eq major-mode 'dired-mode) (dired-get-marked-files))
+                     (t '(,(buffer-file-name)))))
+         (do-it-p (if (<= (length file-list) 5)
+                      t (y-or-n-p "Open more than 5 files? "))))
+    (when do-it-p
+      (dolist (fpath file-list)
+        (let ((expanded (expand-file-name fpath)))
+          (pcase system-type
+            ('windows-nt
+             ;; Invoke-Item -LiteralPath 正确处理带空格/特殊字符的路径
+             (start-process
+              "open-external" nil
+              "powershell" "-Command" "Invoke-Item -LiteralPath"
+              expanded))
+            ('darwin
+             (start-process "open-external" nil "open" expanded))
+            ('gnu/linux
+             ;; WSL 内 xdg-open 通常缺失，走 wslview 开 Windows 默认程序
+             (let ((process-connection-type nil))
+               (start-process "open-external" nil
+                              (if sys/wslp "wslview" "xdg-open")
+                              expanded)))))))))
+
+(with-eval-after-load 'dired
+  (define-key dired-mode-map [remap dired-do-open] #'clw/open-in-external-app))
 ;;@@ minibuffer配置
 (use-package minibuffer
   :custom
@@ -1285,19 +1382,20 @@ If in WSL, try to get gateway via system commands."
   (enable-recursive-minibuffers t)
   (inhibit-message-regexps (append inhibit-message-regexps
                                    '("^Saving file" "^Wrote" "^Indentation setup for shell")))
-  (set-message-functions '(inhibit-message))
   :init (minibuffer-depth-indicate-mode)
   :config
   ;; minibuffer 输入时抑制 `message' 回显，避免后台消息打断/覆盖正在输入的内容
   ;; `set-message-functions' 中的函数返回“非 nil 且非字符串”即不显示该消息；
   ;; 这里在 minibuffer 激活时返回 t。消息仍会记录到 *Messages* buffer，
   ;; 只是不在屏幕上闪现（需要时用 `C-h e' 或打开 *Messages* 查看）。
-  ;; 与 `inhibit-message'（按 `inhibit-message-regexps' 正则抑制）共存：
-  ;; 二者任一返回非 nil 即抑制，结果即“minibuffer 激活或匹配正则则不显示”。
   (defun clw/inhibit-message-in-minibuffer (_message)
     "minibuffer 激活时返回 t，以抑制 `message' 的回显。"
     (and (active-minibuffer-window) t))
-  (add-hook 'set-message-functions #'clw/inhibit-message-in-minibuffer))
+  (add-hook 'set-message-functions #'clw/inhibit-message-in-minibuffer)
+  ;; `inhibit-message' 按 `inhibit-message-regexps' 正则抑制，与上面的
+  ;; minibuffer 抑制共存（二者任一返回非 nil 即抑制）。注意它必须位于
+  ;; `set-message-functions' 首位才能生效（add-hook 前插，故后加的在首位）。
+  (add-hook 'set-message-functions #'inhibit-message))
 ;;@@ simple
 (use-package simple
   :bind
@@ -1318,17 +1416,14 @@ If in WSL, try to get gateway via system commands."
   :config (temp-buffer-resize-mode))
 ;;@@ info
 (use-package info
-  :hook ((Info-mode . mixed-pitch-mode)
-         (Info-mode . olivetti-mode))
+  :hook (Info-mode . mixed-pitch-mode)
   :custom-face (Info-quoted ((t (:inherit fixed-pitch)))))
 ;;@@ elisp
 (use-package elisp-mode
   :config
-  ;; Syntax highlighting of known Elisp symbols
-  (if (boundp 'elisp-fontify-semantically)
-      (setq elisp-fontify-semantically t)
-    (use-package highlight-defined
-      :hook (emacs-lisp-mode inferior-emacs-lisp-mode)))
+  ;; Syntax highlighting of known Elisp symbols（Emacs 31+ 内置；
+  ;; 30.x 上此变量不存在，设置无效但无害，语义高亮静默缺席）
+  (setq elisp-fontify-semantically t)
 
   (with-no-warnings
     ;; Align indent keywords
@@ -1433,9 +1528,7 @@ Lisp function does not specify a special indentation."
 (setopt package-selected-packages
         '(;; 安装的包列表
           markdown-mode ; 提供 emacs 中的 markdown 支持
-          ;;cnfonts ; 中英文字体对其，通过 `cnfonts-edit-profile' 进行设定
           ace-window ; 窗口字母标号跳转（M-o，替代 winum）
-          pulsar ; 跳转后脉冲高亮当前行
           ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
           avy ; 快速跳转（M-j 输入字符序列跳转）
           pyim ; 拼音输入法
@@ -1464,7 +1557,6 @@ Lisp function does not specify a special indentation."
           cape ; 为 corfu 提供一些后端
           envrc ; 类似 buffer-env
           powershell ; 在 Emacs 中打开 powershell, windows
-          f ; 稍微好用一点的文件 API
           p-search ; 某种搜索工具
           doom-themes
           doom-modeline
@@ -1483,7 +1575,6 @@ Lisp function does not specify a special indentation."
           apheleia
           jinx
           highlight-quoted
-          treesit-auto
           org-modern ; org-mode 现代化外观
           org-appear ; 光标进入自动展开 emphasis/link 标记
           toc-org ; 自动维护 :TOC: 目录
@@ -1598,16 +1689,12 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;;@@ 安装来自 git 仓库的包
 (setopt package-vc-selected-packages
         '(
-          ;; (yyorg-bookmark :url "https://github.com/include-yy/yyorg-bookmark")
-          ;; (chodf :url "https://github.com/include-yy/chodf")
-          ;; (rescript-mode :url "https://github.com/include-yy/rescript-mode")
-          ;;(ox-w3ctr :url "https://github.com/include-yy/ox-w3ctr")
-          ;;(tetosave :url "https://github.com/yyelpa/tetosave") ; 自动保存
-          ;;(consult-everything :url "https://github.com/jthaman/consult-everything")
-          ;;(wgsl-ts-mode :url "https://github.com/acowley/wgsl-ts-mode")
           (persistent-cached-load-filter
            :url "https://github.com/include-yy/persistent-cached-load-filter")
           (project-x :url "https://github.com/vmargb/project-x")
+          ;; 加速 magit：单次 porcelain 缓存替代重 diff（默认拉最新提交，
+          ;; 等价 use-package 的 :rev :newest；package-vc spec 不支持 :rev）
+          (magit-fast :url "https://github.com/zHaOdANiuu/magit-fast")
           )
         )
 
@@ -1635,36 +1722,6 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;;@@ MARKDOWN-MODE
 (use-package markdown-mode
   :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
-;;@@ CNFONTS
-;; 目前感觉没啥用，先注释掉
-;; (use-package cnfonts
-;;   :defer t
-;;   :hook after-init
-;;   :init
-;;   (setopt cnfonts-personal-fontnames
-;;           '(;; English
-;; 	    ("Maple Mono NF CN" "Noto Sans Mono" "Noto Sans" "Noto Sans Mono CJK SC" "Roboto Mono")
-;; 	    ;; Chinese
-;; 	    ("Maple Mono NF CN")
-;; 	    ;; EXT-B
-;; 	    ()
-;; 	    ;; Symbol
-;; 	    ()
-;; 	    ;; Decorate
-;; 	    ())))
-;;@@FIND-FILE-IN-PROJECT 方便的项目内文件搜索
-;;te 设置 ffip 在 Windows 下的相关选项
-;; 在 Windows 上需要设定 `ffip-find-executable' 为 find
-;; 也可考虑使用 rust 编写的 fd，设置 `ffip-use-rust-fd' 为 `t'
-;; 并设定 `ffip-find-executable' 为 fd 路径
-;; 注意：使用 fd 必须设定 `ffip-use-rust-fd'，fd 与 find 命令行参数不一致
-;; 使用 `project-find-file' 也行
-(use-package find-file-in-project
-  :disabled
-  :bind ("C-c f" . find-file-in-project)
-  :config
-  (clw/add-to-group 'ffip-find-executable)
-  (clw/add-to-group 'ffip-use-rust-fd))
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
 (use-package ace-window
   :bind (("M-o" . ace-window)
@@ -1673,22 +1730,74 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l)) ; 标号用 home row 字母
   (aw-scope 'frame))                      ; 只在当前 frame 内选窗
 
-;;@@PULSAR 跳转后脉冲高亮当前行（ace-window/consult/next-error 的视觉反馈）
-(use-package pulsar
-  :hook ((consult-after-jump . pulsar-recenter-top)  ; consult 跳转后置顶并显示
-         (consult-after-jump . pulsar-reveal-entry)
-         (imenu-after-jump . pulsar-recenter-top)
-         (imenu-after-jump . pulsar-reveal-entry)
-         (next-error . pulsar-pulse-line))           ; M-g n/p 等跳转后脉冲
+;;@@PULSE 跳转后脉冲高亮当前行（内置 pulse，替代 pulsar）
+(use-package pulse
+  :hook ((consult-after-jump . clw/pulse-recenter-top)
+         (consult-after-jump . clw/pulse-reveal-entry)
+         (imenu-after-jump . clw/pulse-recenter-top)
+         (imenu-after-jump . clw/pulse-reveal-entry)
+         (next-error . clw/pulse-line))
   :custom
-  (pulsar-face 'pulsar-magenta)           ; 脉冲颜色
-  (pulsar-highlight-face 'pulsar-yellow)  ; 非脉冲场景的高亮颜色
+  ;; 非 nil 时逐渐淡出的脉冲；终端不支持时自动退化为静态高亮
+  (pulse-flag t)
   :config
-  ;; 在内置默认触发列表上追加自己的常用跳转命令
-  (add-to-list 'pulsar-pulse-functions 'ace-window)
-  (add-to-list 'pulsar-pulse-functions 'outline-next-visible-heading)
-  (add-to-list 'pulsar-pulse-functions 'outline-previous-visible-heading)
-  (pulsar-global-mode 1))
+  (defun clw/pulse-line ()
+    "Pulse the current line using the built-in pulse face."
+    (interactive)
+    (pulse-momentary-highlight-one-line (point)))
+
+  (defun clw/pulse-recenter-top ()
+    "Reposition point at the top of the window and pulse the line."
+    (recenter 0)
+    (clw/pulse-line))
+
+  (defun clw/pulse-reveal-entry ()
+    "Reveal the Org or Outline entry at point after a jump."
+    (cond
+     ((and (eq major-mode 'org-mode)
+           (org-at-heading-p))
+      (org-show-entry))
+     ((and (or (eq major-mode 'outline-mode)
+               (bound-and-true-p outline-minor-mode))
+           (outline-on-heading-p))
+      (outline-show-entry))))
+
+  ;; 对齐原 pulsar-pulse-functions 的常用默认命令，并保留 ace-window、
+  ;; outline 标题跳转等此前显式追加的触发项。imenu/next-error/occur
+  ;; 已由上面的专用 hook 覆盖，不在此重复触发。
+  (defvar clw/pulse-commands
+    '(ace-window
+      backward-page forward-page
+      bookmark-jump
+      delete-other-windows delete-window quit-window
+      dired-maybe-insert-subdir dired-up-directory dired-goto-file
+      dired-next-dirline dired-prev-dirline
+      goto-line
+      handle-select-window handle-switch-frame
+      move-to-window-line-top-bottom
+      narrow-to-defun narrow-to-page narrow-to-region widen
+      next-buffer previous-buffer
+      org-backward-heading-same-level org-forward-heading-same-level
+      org-next-visible-heading org-previous-visible-heading
+      other-window next-multiframe-window
+      outline-backward-same-level outline-forward-same-level
+      outline-next-visible-heading outline-previous-visible-heading
+      outline-up-heading
+      recenter-top-bottom reposition-window
+      scroll-down-command scroll-up-command
+      tab-close tab-new tab-next tab-previous
+      windmove-down windmove-left windmove-right windmove-up
+      windmove-swap-states-down windmove-swap-states-left
+      windmove-swap-states-right windmove-swap-states-up))
+
+  (defun clw/pulse-post-command ()
+    "Pulse the current line after commands in `clw/pulse-commands'."
+    (when (and (not (minibufferp))
+               (memq (or real-this-command this-command)
+                     clw/pulse-commands))
+      (clw/pulse-line)))
+
+  (add-hook 'post-command-hook #'clw/pulse-post-command))
 
 ;;@@GHOSTEL 基于 Ghostty VT 引擎的终端模拟器（Windows 原生可用，预编译模块自动下载）
 (use-package ghostel
@@ -1747,7 +1856,8 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (setopt corfu-cycle t)
   ;; 允许自动触发 corfu 补全
   (setopt corfu-auto t)
-  ;; 在补全时若候选项小于 3 则不弹出选项
+  ;; 内置 completion-in-region 候选数不超过 3 时允许循环补全；
+  ;; 该变量不控制 Corfu 弹窗
   (setopt completion-cycle-threshold 3)
   ;; 在输入字符 0.3 秒后触发 corfu
   (setopt corfu-auto-delay 0.3)
@@ -1756,9 +1866,8 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (add-hook 'prog-mode-hook
             (lambda () (corfu-mode)))
   (defun corfu-enable-always-in-minibuffer ()
-    "Enable Corfu in the minibuffer if Vertico/Mct are not active."
-    (unless (or (bound-and-true-p mct--active)
-                (bound-and-true-p vertico--input)
+    "Enable Corfu in the minibuffer if Vertico is not active."
+    (unless (or (bound-and-true-p vertico--input)
                 (eq (current-local-map) read-passwd-map))
       ;; (setq-local corfu-auto nil) ;; Enable/disable auto completion
       (setq-local corfu-echo-delay nil ;; Disable automatic echo and popup
@@ -1809,7 +1918,6 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                              (?$ . avy-action-ispell)
                              (?z . avy-action-zap-to-char)
                              (?  . avy-action-embark)
-                             (?= . avy-action-define)
                              (23 . avy-action-zap-to-char)
                              (67108896 . avy-action-mark-to-char)
                              (?h . avy-action-helpful)
@@ -1829,11 +1937,6 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                              (?T . avy-action-teleport-whole-line)
                              ))
 
-  ;; (define-advice avy-goto-char-timer (:around (orig-fn &optional arg)
-  ;;                                     single-candidate-jump)
-  ;;   (let ((avy-single-candidate-jump t))
-  ;;     (funcall orig-fn arg)))
-
   (defun avy-action-exchange (pt)
     "Exchange sexp at PT with the one at point."
     (set-mark pt)
@@ -1845,16 +1948,6 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
       (call-interactively #'display-local-help))
     (select-window
      (cdr (ring-ref avy-ring 0)))
-    t)
-
-  (defun avy-action-define (pt)
-    (cl-letf (((symbol-function 'keyboard-quit)
-               #'abort-recursive-edit))
-      (save-excursion
-        (goto-char pt)
-        (dictionary-search-dwim))
-      (select-window
-       (cdr (ring-ref avy-ring 0))))
     t)
 
   (defun avy-action-embark (pt)
@@ -1950,8 +2043,7 @@ re-reads from the first char."
     (interactive (list
                   (clw/avy--read-char-2)
                   current-prefix-arg))
-    (let* ((ev last-command-event)
-           (echo-keystrokes nil))
+    (let ((echo-keystrokes nil))
       (push-mark (point) t)
       (if (search-forward str2 nil t
                           (+ (if (looking-at (regexp-quote str2))
@@ -1969,12 +2061,11 @@ re-reads from the first char."
        map)))
 
   (defun clw/avy-previous-char-2 (&optional str2 arg)
-    "Go to the next occurrence of two characters"
+    "Go to the previous occurrence of two characters"
     (interactive (list
                   (clw/avy--read-char-2)
                   current-prefix-arg))
-    (let* ((ev last-command-event)
-           (echo-keystrokes nil))
+    (let ((echo-keystrokes nil))
       (push-mark (point) t)
       (unless (search-backward str2 nil t (or arg 1))
         (pop-mark)))
@@ -2058,12 +2149,12 @@ The current window is chosen if WIN is not specified."
    '(avy-lead-face-2 ((t :background unspecified :inherit avy-lead-face))))
 
   (define-advice avy-goto-line-below (:around (orig-fn &rest args) no-default-action)
-    "Ensure no default `avy-action' when moving, and go to end of line."
-    (let ((avy-action)) (apply orig-fn args))) ;; (end-of-line)
+    "Ensure no default `avy-action' when moving."
+    (let ((avy-action)) (apply orig-fn args)))
 
   (define-advice avy-goto-line-above (:around (orig-fn &rest args) no-default-action)
-    "Ensure no default `avy-action' when moving, and go to end of line."
-    (let ((avy-action)) (apply orig-fn args))) ;; (end-of-line)
+    "Ensure no default `avy-action' when moving."
+    (let ((avy-action)) (apply orig-fn args)))
 
   ;; Jump to all paren types with [ and ]
   (advice-add 'avy-jump :filter-args
@@ -2109,8 +2200,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
          ("M-s M-w" . avy-kill-ring-save-region)
          ("M-s t"   . avy-move-line)
          ("M-s M-t" . avy-move-region)
-         ;; ("M-s s"   . clw/avy-next-char-2)
-         ;; ("M-s r"   . clw/avy-previous-char-2)
          ("M-s z"   . clw/avy-copy-line-no-prompt)
          :map isearch-mode-map
          ("C-'"     . clw/avy-isearch)
@@ -2435,10 +2524,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ("C-c u" . move-dup-duplicate-up)
   ([M-up] . move-dup-move-lines-up)
   ([M-down] . move-dup-move-lines-down))
-;;@@ treesit-auto
-(use-package treesit-auto
-  :defer t
-  :hook ((prog-mode conf-mode) . treesit-auto-mode))
 ;;@@ symbol-overlay 一键高亮当前光标下的符号（变量名 / 函数名 / 关键字），并在所有出现位置之间快速跳转。
 (use-package symbol-overlay
   :hook ((prog-mode html-mode conf-mode) . symbol-overlay-mode)
@@ -2494,9 +2579,16 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (magit-module-sections-nested nil)
   ;; Windows 上 pty 只是模拟实现，每个 git 进程免掉这层包装的开销
   (magit-process-connection-type nil)
+  ;; status 前不逐个弹窗询问保存 repo 内 buffer，需要时用 C-x s 统一保存
+  (magit-save-repository-buffers nil)
+  ;; revision buffer 不插入 related-refs，加快大仓库的 commit 浏览
+  (magit-revision-insert-related-refs nil)
   (magit-display-buffer-function
    #'magit-display-buffer-same-window-except-diff-v1)
   (magit-bury-buffer-function 'magit-restore-window-configuration)
+  ;; HACK magit#5320: status buffer 中 long-line-threshold 非 nil 会
+  ;; 扭曲 motion/TAB 行为，这里 buffer-local 置 nil（全局值保持不变）
+  :hook (magit-status-mode . (lambda () (setq-local long-line-threshold nil)))
   :init
   (defmacro aquamacs/fullframe-mode (mode)
     "Configure buffers that open in MODE to start out full-frame."
@@ -2515,6 +2607,104 @@ This differs from Avy's goto-char-timer in how it processes parens."
                               magit-insert-modules-unpushed-to-upstream
                               magit-insert-modules-unpushed-to-pushremote))
       (remove-hook 'magit-module-sections-hook module-section))))
+;;@@ magit-fast 加速 magit（porcelain 单次缓存替代重 diff，减少 git 调用）
+(use-package magit-fast
+  :after magit
+  :bind
+  (:map magit-status-mode-map
+   ("<return>" . clw/magit-fast-diff))
+  :custom
+  ;; 默认颜色表是深色主题（Catppuccin）的粉彩前景，doom-oksolar-light
+  ;; 等浅色背景下几乎看不清；改用 :inherit 语义 face，随主题自适应
+  (magit-fast-status-alist
+   '(("M" "modified" . (:inherit warning))
+     ("A" "new file" . (:inherit success))
+     ("D" "deleted"  . (:inherit error))
+     ("R" "renamed"  . (:inherit font-lock-function-name-face))
+     ("C" "copied"   . (:inherit font-lock-type-face))
+     ("U" "unmerged" . (:inherit font-lock-keyword-face))))
+  :init
+  ;; commit 时不再自动展示 diff（server-switch 场景省掉开销）
+  (remove-hook 'server-switch-hook 'magit-commit-diff)
+  ;; git 调用前不逐 buffer 保存（与 magit-save-repository-buffers nil 互补）
+  (remove-hook 'magit-pre-start-git-hook #'magit-maybe-save-repository-buffers)
+  (magit-fast-mode)
+  ;; ---- TAB 懒加载 diff ----
+  ;; magit-fast 的 status 只列文件名、不内联 hunk（提速的来源）。这里
+  ;; 借 magit 官方的 `magit-insert-section-body' 延迟机制：文件行建为
+  ;; heading-only 的隐藏 section，hunk 插入交给 washer，首次 TAB 展开才
+  ;; 跑该文件的 git diff；收起再展开不重复跑。刷新时已展开的文件保持
+  ;; 展开并重洗，未展开的文件零 git 开销。
+  (defun clw/magit-fast-insert-hunks ()
+    "在当前 file section 内插入该文件的 diff hunks（washer，展开时才跑 git）。"
+    (when-let* ((section magit-insert-section--current)
+                (file (oref section value))
+                (kind (oref (oref section parent) type)))
+      (let ((beg (point))
+            (untracked (eq kind 'untracked)))
+        (apply #'magit-git-insert
+               (flatten-tree
+                `("diff"
+                  ,(and (eq kind 'staged) "--cached")
+                  ,@(and untracked '("--no-index"))
+                  ,magit-buffer-diff-args
+                  "--no-prefix"
+                  ,(and (not untracked) "--ita-visible-in-index")
+                  ,@(if untracked
+                        (list "/dev/null" file)
+                      (list "--" file)))))
+        (when (> (point) beg)
+          (save-restriction
+            (narrow-to-region beg (point))
+            (goto-char beg)
+            (if (re-search-forward "^@\\{2,\\} " nil t)
+                ;; 丢掉 @@ 之前的文件头（diff --git/index/---/+++），只留 hunks
+                (progn (goto-char (line-beginning-position))
+                       (delete-region beg (point))
+                       (magit-wash-sequence #'magit-diff-wash-hunk))
+              ;; 无文本 hunk（binary 等）：保留原始输出当说明
+              (goto-char (point-max))))))))
+  ;; 覆盖 magit-fast 的文件行插入：彩色标题行 + 懒加载内容区
+  ;; （原实现把整行当 section 正文，TAB 只能折叠行本身、无 hunk 可展）
+  (define-advice magit-fast--insert
+      (:override (entries) clw/magit-fast-insert)
+    (dolist (entry entries)
+      (let* ((code (car entry))
+             (file (cdr entry))
+             (info (assoc code magit-fast-status-alist)))
+        (magit-insert-section (file file t)
+          (magit-insert-heading
+           (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
+                      'font-lock-face
+                      (if info (cddr info) 'magit-diff-file-heading)))
+          (magit-insert-section-body
+           (clw/magit-fast-insert-hunks)))))
+    (insert "\n"))
+  (defun clw/magit-fast-diff ()
+    "显示点下内容的 diff 详情。
+文件行（unstaged/staged/unmerged）→ 该文件 diff；Recent commits 的
+commit 行 → 该 commit diff；其余（untracked 文件等）回落
+`magit-visit-thing'。文件行的 TAB 可懒加载内联 hunks，本命令在独立
+buffer 看 diff。"
+    (interactive)
+    (let ((file (magit-file-at-point)))
+      (cond
+       ((and file
+             (magit-section-match '([* unstaged] [* staged] [* unmerged])
+                                  (magit-current-section)))
+        (magit-diff-dwim nil `(,file)))
+       ;; magit-fast 的 Recent commits 行没有 commit section，
+       ;; 行首是 %h 缩写 hash，直接取来打开 commit diff
+       ((save-excursion
+          (beginning-of-line)
+          (looking-at "\\([0-9a-f]\\{7,40\\}\\) "))
+        (magit-show-commit (match-string 1)))
+       ;; 其余（untracked 文件、标题、URL…）解析 RET 在该处键映射的
+       ;; 重定向目标（如 file section → magit-diff-visit-file），保持
+       ;; 原版语义；`magit-visit-thing' 本体是占位符，直接调用会报错
+       (t (call-interactively
+           (or (command-remapping #'magit-visit-thing)
+               #'magit-visit-thing)))))))
 ;;@@ mixed pitch 字体混合显示插件
 (use-package mixed-pitch
   :defer t
@@ -2615,7 +2805,7 @@ Combines project-x's session label display with the built-in
           (read-directory-name "Select directory: " default-directory nil t)
         (cdr (assoc choice choices)))))
   (setq project-prompter #'clw/project-prompt)
-  ;; 启动时自动恢复上次活动的项目（buffer + 窗口布局 + 光标位置）
+  ;; 启动时不自动恢复上次活动的项目，按需手动恢复 buffer/窗口布局
   (setopt project-x-restore-last-project-on-startup nil)
   ;; 同时保存 magit/eshell/vterm/compilation 等特殊 buffer
   (setopt project-x-save-extra-buffers t)
