@@ -1861,8 +1861,15 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (setopt completion-cycle-threshold 3)
   ;; 在输入字符 0.3 秒后触发 corfu
   (setopt corfu-auto-delay 0.3)
+  ;; 自动触发所需的最小前缀长度，默认 3。调小到 2 让弹窗更早打开：
+  ;; LSP 候选池是 server 按当前前缀过滤后返回的，前缀越短池越宽，
+  ;; 之后再用空格加词做 orderless 多词过滤才有东西可滤
+  (setopt corfu-auto-prefix 2)
   ;; 无候选项不显示 no match
   (setopt corfu-quit-no-match t)
+  ;; 输入空格等边界字符时不要退出补全，配合 orderless 多词过滤
+  ;; （默认 'separator 时普通空格会关掉弹窗，只能靠 M-SPC 插入分隔符）
+  (setopt corfu-quit-at-boundary nil)
   (add-hook 'prog-mode-hook
             (lambda () (corfu-mode)))
   (defun corfu-enable-always-in-minibuffer ()
@@ -1893,7 +1900,13 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   :init
   (add-to-list 'completion-at-point-functions #'cape-file)
   (add-to-list 'completion-at-point-functions #'cape-elisp-block)
-  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster))
+  (advice-add 'eglot-completion-at-point :around #'cape-wrap-buster)
+  ;; elisp-completion-at-point 会把文件路径样文本（scratch 里输入
+  ;; ~/foo、/usr/lo 等）也认成符号并返回非 nil 的 capf 结果（0 候选），
+  ;; 且默认独占，corfu 的 capf 链在此截断，cape-file 永远轮不到。
+  ;; 标记为非独占后，符号无候选时链条继续走到 cape-file，
+  ;; 文件路径补全才生效（普通符号补全不受影响）
+  (advice-add 'elisp-completion-at-point :around #'cape-wrap-nonexclusive))
 ;;@@ELDOC-BOX 悬浮式 ELDOC
 (use-package eldoc-box
   :if (display-graphic-p)
