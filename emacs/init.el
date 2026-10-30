@@ -1100,14 +1100,23 @@ If in WSL, try to get gateway via system commands."
   (eglot-report-progress nil)
   (eglot-autoshutdown t)
   (eglot-code-action-indicator "✓")
+  ;; 握手默认同步阻塞最多 3 秒（eglot-sync-connect 3），改为完全异步不卡 UI
+  (eglot-sync-connect nil)
+  ;; 禁用事件日志（每条 JSON-RPC 都拷贝进 *eglot-events*，大项目下是
+  ;; 实打实的分配与内存开销）。注意：旧变量 eglot-events-buffer-size 自
+  ;; eglot 1.16 起废弃，且在 :config 里设置无效——默认值在 eglot 加载时
+  ;; 已算完（实测仍是 :size 2000000 :format full），必须用这个
+  (eglot-events-buffer-config '(:size 0 :format short))
   :config
   (add-to-list 'eglot-ignored-server-capabilities
                :documentHighlightProvider)
   (add-to-list 'eglot-ignored-server-capabilities
                :inlayHintProvider)
+  ;; on-type formatting 每次按键都检查触发字符、命中就发 RPC 应用编辑，
+  ;; 还会和 apheleia 外部格式化打架（rust-analyzer/tsserver 都提供它）
+  (add-to-list 'eglot-ignored-server-capabilities
+               :documentOnTypeFormattingProvider)
   ;; 注意保留 :textDocument/hover：eldoc-box-hover-mode 依赖它获取文档
-  ;; 取消 eglot 的 log 消息，我不是 LSP server 的开发者
-  (setopt eglot-events-buffer-size 0)
   ;; 在 mode-line 显示 action 操作。不然可能干扰 eldoc。Emacs 31
   (setopt eglot-code-action-indications '(mode-line))
   ;; 不要把 flymake 加进 eglot-stay-out-of：那会让 LSP 诊断完全不进入 flymake，
