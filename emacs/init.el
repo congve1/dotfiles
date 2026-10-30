@@ -688,7 +688,7 @@ If in WSL, try to get gateway via system commands."
         org-fontify-whole-heading-line t
         org-hide-leading-stars t
         org-ellipsis (if (char-displayable-p ?⏷) "  ⏷" "  ▾")
-        org-catch-invisible-edits 'smart
+        org-fold-catch-invisible-edits 'smart
         org-special-ctrl-a/e t
         org-special-ctrl-k t
         org-M-RET-may-split-line '((headline) (default . nil))
@@ -708,7 +708,6 @@ If in WSL, try to get gateway via system commands."
         org-export-coding-system 'utf-8
         org-export-with-smart-quotes t
         org-html-validation-link nil
-        org-export-kill-product-buffer-when-displayed t
         org-confirm-babel-evaluate nil
         org-src-fontify-natively t
         org-src-tab-acts-natively t
@@ -1056,7 +1055,7 @@ If in WSL, try to get gateway via system commands."
 ;; 全局打开
 (global-prettify-symbols-mode)
 ;; 光标停在 prettify 符号上时不再取消 prettify，减少光标移动的 redisplay 开销
-(setq prettify-symbols-un-prettify-at-point nil)
+(setq prettify-symbols-unprettify-at-point nil)
 (add-hook 'emacs-lisp-mode-hook
           (defun clw/nouse-prettify ()
             (prettify-symbols-mode -1)))
