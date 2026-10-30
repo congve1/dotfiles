@@ -55,9 +55,9 @@
               (when (boundp 'clw/init-file-name-handler-alist)
                 (setq file-name-handler-alist
                       clw/init-file-name-handler-alist)))))
-;;@@ emacs 版本必须大于等于 30.1
-(when (version< emacs-version "30.1")
-  (error "init.el: emacs version must >= 30.1"))
+;;@@ emacs 版本必须大于等于 31.1
+(when (version< emacs-version "31.1")
+  (error "init.el: emacs version must >= 31.1"))
 ;;@@ Emacs 31 新特性，缓存 load-path 加快加载速度，大约提升 15%
 ;; 通过设定 `load-suffixes' / `load-file-rep-suffixes' 减小搜索项数量也能带来
 ;; 类似提升，但在提交上述补丁后收益不大（已验证，原死代码块已删除）：
@@ -2703,11 +2703,11 @@ This differs from Avy's goto-char-timer in how it processes parens."
              (info (assoc code magit-fast-status-alist)))
         (magit-insert-section (file file t)
           (magit-insert-heading
-           (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
-                      'font-lock-face
-                      (if info (cddr info) 'magit-diff-file-heading)))
+            (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
+                        'font-lock-face
+                        (if info (cddr info) 'magit-diff-file-heading)))
           (magit-insert-section-body
-           (clw/magit-fast-insert-hunks)))))
+            (clw/magit-fast-insert-hunks)))))
     (insert "\n"))
   (defun clw/magit-fast-diff ()
     "显示点下内容的 diff 详情。
