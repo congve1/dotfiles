@@ -2671,12 +2671,20 @@ This differs from Avy's goto-char-timer in how it processes parens."
             (narrow-to-region beg (point))
             (goto-char beg)
             (if (re-search-forward "^@\\{2,\\} " nil t)
-                ;; 丢掉 @@ 之前的文件头（diff --git/index/---/+++），只留 hunks
+                ;; @@ 之前的文件头（diff --git/index/---/+++）存入 file
+                ;; section 的 header 槽——stage/unstage/discard chunk 走
+                ;; magit-apply-hunk → magit-diff-file-header 重建 patch，
+                ;; 槽为 nil 会 (wrong-type-argument stringp nil)。存好后删掉，只留 hunks
                 (progn (goto-char (line-beginning-position))
+                       (oset section header
+                             (buffer-substring-no-properties beg (point)))
                        (delete-region beg (point))
                        (magit-wash-sequence #'magit-diff-wash-hunk))
-              ;; 无文本 hunk（binary 等）：保留原始输出当说明
-              (goto-char (point-max))))))))
+              ;; 无文本 hunk（binary 等）：整段存 header 槽备用，
+              ;; 原始输出保留在 buffer 当说明
+              (progn (oset section header
+                           (buffer-substring-no-properties beg (point-max)))
+                     (goto-char (point-max)))))))))
   ;; 覆盖 magit-fast 的文件行插入：彩色标题行 + 懒加载内容区
   ;; （原实现把整行当 section 正文，TAB 只能折叠行本身、无 hunk 可展）
   (define-advice magit-fast--insert
