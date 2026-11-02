@@ -150,6 +150,8 @@
 ;;@@ 单次滚动设置为 1 行
 (setopt scroll-step 1)
 (setopt scroll-conservatively 10000)
+;; C-M-v (scroll-other-window) 默认滚最近最少用的窗口，翻参考资料更顺手
+(setopt other-window-scroll-default #'get-lru-window)
 ;; 光标在行尾时保持在行尾，行尾追加内容不跳列
 (setopt track-eol t)
 ;;@@ 添加一些全局绑定
@@ -197,6 +199,7 @@
 (with-eval-after-load 'so-long
   (dolist (mode '(puni-mode symbol-overlay-mode
                             corfu-mode apheleia-mode
+                            hs-minor-mode
                             display-fill-column-indicator-mode))
     (add-to-list 'so-long-minor-modes mode)))
 ;;@@ kill 时若与 kill-ring 内最后内容重复则不添加入 kill-ring
@@ -381,6 +384,25 @@ If in WSL, try to get gateway via system commands."
   (kmacro "C-h o <return>"))
 (keymap-set emacs-lisp-mode-map "C-h y" 'clw/find-symbol-at-point)
 (keymap-set lisp-interaction-mode-map "C-h y" 'clw/find-symbol-at-point)
+;;@@ C-h a 聚合 apropos 全家桶（默认 C-h a 只有 apropos-command，其余散落各处）
+(defvar-keymap help-apropos-map
+  :doc "apropos 子命令集"
+  "a"   #'apropos
+  "l"   #'apropos-library
+  "f"   #'apropos-function
+  "x"   #'apropos-command
+  "v"   #'apropos-variable
+  "V"   #'apropos-local-variable
+  "u"   #'apropos-user-option
+  "d"   #'apropos-documentation
+  "C-f" #'customize-apropos-faces
+  "g"   #'customize-apropos-groups
+  "o"   #'customize-apropos-options
+  "c"   #'customize-apropos
+  "i"   #'info-apropos)
+(keymap-set help-map "a" help-apropos-map)
+;;@@ C-h M-k 直接跳到该按键绑定命令的源码（省去 describe-key 后再按 s）
+(keymap-set help-map "M-k" #'find-function-on-key)
 ;;@@ 关闭 `indent-tabs-mode'
 (setopt indent-tabs-mode nil)
 ;;@@ 持久前置快捷键映射
@@ -487,6 +509,49 @@ If in WSL, try to get gateway via system commands."
   :custom
   (wgrep-auto-save-buffer t)
   (wgrep-change-readonly-file t))
+;;@@RE-BUILDER 正则可视化构造后直接进入替换（来源 karthinks "Bridging Islands"）
+;; C-M-% 打开 re-builder 高亮匹配、交互构造正则（C-c C-i 可切 rx 表达式语法），
+;; RET 直接把正则带入 query-replace-regexp，替代"构造→复制→退出→粘贴"四步；
+;; 需要在正则里换行时用 C-q C-j。支持 region：只替换选区。
+(defvar clw/re-builder-positions nil
+  "调用 re-builder 前的 point 与 region 位置。")
+(defun clw/re-builder-save-state (&rest _)
+  "保存调用 `re-builder' 前的 point 与 region 位置。"
+  (setq clw/re-builder-positions
+        (cons (point)
+              (when (region-active-p)
+                (list (region-beginning) (region-end))))))
+(advice-add 're-builder :before #'clw/re-builder-save-state)
+
+(defun clw/reb-replace-regexp (&optional delimited)
+  "退出 re-builder 并用其正则执行 `query-replace-regexp'。
+DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
+  (interactive "P")
+  (reb-update-regexp)
+  (let* ((re (reb-target-value 'reb-regexp))
+         (replacement (query-replace-read-to
+                       re
+                       (concat "Query replace"
+                               (if current-prefix-arg
+                                   (if (eq current-prefix-arg '-) " backward" " word")
+                                 "")
+                               " regexp"
+                               (if (with-selected-window reb-target-window
+                                     (region-active-p))
+                                   " in region" ""))
+                       t))
+         (pnt (car clw/re-builder-positions))
+         (beg (cadr clw/re-builder-positions))
+         (end (caddr clw/re-builder-positions)))
+    (with-selected-window reb-target-window
+      (goto-char pnt)
+      (setq clw/re-builder-positions nil)
+      (reb-quit)
+      (query-replace-regexp re replacement delimited beg end))))
+(with-eval-after-load 're-builder
+  (keymap-set reb-mode-map "RET" #'clw/reb-replace-regexp)
+  (keymap-set reb-lisp-mode-map "RET" #'clw/reb-replace-regexp))
+(keymap-global-set "C-M-%" #'re-builder)
 ;;@@GOTO-ADDRESS 注释/字符串中的 URL 可点击
 (use-package goto-addr
   :hook (prog-mode . goto-address-prog-mode))
@@ -1381,6 +1446,13 @@ If in WSL, try to get gateway via system commands."
 
 (with-eval-after-load 'dired
   (define-key dired-mode-map [remap dired-do-open] #'clw/open-in-external-app))
+;;@@DIRED-HIST dired 目录历史 l/r 前进后退（对齐 help/info/eww 惯例）
+;; 接管 dired 原有的 l (dired-do-redisplay) 与 r (wdired) 两键
+(use-package dired-hist
+  :hook (dired-mode . dired-hist-mode)
+  :config
+  (keymap-set dired-mode-map "l" #'dired-hist-go-back)
+  (keymap-set dired-mode-map "r" #'dired-hist-go-forward))
 ;;@@ minibuffer配置
 (use-package minibuffer
   :custom
@@ -1429,6 +1501,9 @@ If in WSL, try to get gateway via system commands."
 ;;@@ elisp
 (use-package elisp-mode
   :config
+  ;; C-x C-e 用 pretty-print 版输出更干净；C-u C-x C-e 把结果插进 buffer
+  ;; （C-0 前缀插完整结果不截断）
+  (keymap-global-set "<remap> <eval-last-sexp>" #'pp-eval-last-sexp)
   ;; Syntax highlighting of known Elisp symbols（Emacs 31+ 内置；
   ;; 30.x 上此变量不存在，设置无效但无害，语义高亮静默缺席）
   (setq elisp-fontify-semantically t)
@@ -1551,6 +1626,7 @@ Lisp function does not specify a special indentation."
           consult ; 异步查询框架
           consult-eglot
           wgrep ; 基于 grep 的批量替换工具
+          dired-hist ; dired 目录历史导航（l/r）
           devdocs ; 提供来自 devdocs 的文档支持
           diminish ; 让某些 mode 标识不在 modeline 显示
           ;;yasnippet ; 强大的代码模板工具
@@ -1733,10 +1809,39 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
 (use-package ace-window
   :bind (("M-o" . ace-window)
-         ("C-x o" . ace-window))
+         ("C-x o" . ace-window)
+         ;; 选窗口后显示"下一个命令"的 buffer（配合任意 buffer 命令）
+         ("C-x 4 o" . clw/ace-window-prefix)
+         ;; 选窗口后在该窗口内执行任意命令
+         ("C-x O" . clw/ace-window-one-command))
+  :commands (clw/ace-window-prefix clw/ace-window-one-command)
   :custom
   (aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l)) ; 标号用 home row 字母
-  (aw-scope 'frame))                      ; 只在当前 frame 内选窗
+  (aw-scope 'frame)                      ; 只在当前 frame 内选窗
+  (aw-dispatch-always t)                 ; ≤2 个窗口时也弹出动作菜单
+  :config
+  (defun clw/ace-window-prefix ()
+    "用 ace-window 选择窗口，显示下一个命令的 buffer。
+即任何 buffer 命令的结果都落进所选窗口（等价 window-prefix 系列，
+只是目标窗口由 ace-window 指定）。"
+    (interactive)
+    (display-buffer-override-next-command
+     (lambda (buffer _)
+       (let ((window (aw-select (propertize " ACE" 'face 'mode-line-highlight))))
+         (cons window 'reuse)))
+     nil "[ace-window]")
+    (message "下一个命令的 buffer 将显示在 ace-window 所选窗口…"))
+  (defun clw/ace-window-one-command ()
+    "用 ace-window 选一个窗口，在其中执行随后按键对应的命令。"
+    (interactive)
+    (let ((win (aw-select " ACE")))
+      (when (windowp win)
+        (with-selected-window win
+          (let* ((cmd (key-binding
+                       (read-key-sequence
+                        (format "在 %s 中执行…" (buffer-name (window-buffer win))))))
+                 (this-command cmd))
+            (call-interactively cmd)))))))
 
 ;;@@PULSE 跳转后脉冲高亮当前行（内置 pulse，替代 pulsar）
 (use-package pulse
@@ -2236,6 +2341,14 @@ This differs from Avy's goto-char-timer in how it processes parens."
             (eglot-capf (styles orderless basic))))
   )
 ;;@@ consult
+;; M-y DWIM：紧跟 C-y 之后 = 原生 yank-pop 循环（顶层 kill-ring，连按快翻）；
+;; 单独按下 = consult-yank-pop 菜单（深层挑选）
+(defun clw/consult-yank-or-yank-pop (&optional arg)
+  "紧跟 yank 之后调用 `yank-pop' 循环，否则用 `consult-yank-pop' 挑选。"
+  (interactive "*p")
+  (if (eq last-command 'yank)
+      (yank-pop arg)
+    (consult-yank-pop)))
 (use-package consult
   :defer 0.5
   :bind (([remap repeat-complex-command] . consult-complex-command)
@@ -2246,7 +2359,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
          ([remap bookmark-jump] . consult-bookmark)
          ([remap goto-line] . consult-goto-line)
          ([remap imenu] . consult-imenu)
-         ([remap yank-pop] . consult-yank-pop)
+         ([remap yank-pop] . clw/consult-yank-or-yank-pop)
          ("C-c M-x" . consult-mode-command)
          ("C-c h" . consult-history)
          ("C-c k" . consult-kmacro)
@@ -2302,6 +2415,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ("C-h B" . embark-bindings-at-point)
   ("M-n" . embark-next-symbol)       ; 在相邻同类型 target 间循环
   ("M-p" . embark-previous-symbol)
+  :commands (clw/embark-act-with-completing-read)
   :custom
   ;; 执行动作后不退出 minibuffer，便于连续对多个候选执行动作
   (embark-quit-after-action nil)
@@ -2459,7 +2573,53 @@ This differs from Avy's goto-char-timer in how it processes parens."
                 (keymap-set embark-general-map
                             (key-description (make-vector 1 key))
                             #'clw/embark-prefix-window))
-              clw/window-prefix-map))
+              clw/window-prefix-map)
+
+  ;; 多类别命令（consult-buffer 等）按 target 类别执行对应默认动作
+  (setf (alist-get 'buffer embark-default-action-overrides) #'pop-to-buffer-same-window
+        (alist-get 'file embark-default-action-overrides) #'find-file
+        (alist-get 'bookmark embark-default-action-overrides) #'bookmark-jump
+        (alist-get 'library embark-default-action-overrides) #'find-library)
+  ;; 动作菜单 S：以 root 打开文件（含 TRAMP 远程文件场景）
+  (defun clw/sudo-find-file (file)
+    "以 root 权限打开 FILE。"
+    (interactive "FOpen file as root: ")
+    (when (file-writable-p file)
+      (user-error "当前用户可写，无需 sudo"))
+    (find-file (if (file-remote-p file)
+                   (concat "/" (file-remote-p file 'method) ":"
+                           (file-remote-p file 'user) "@" (file-remote-p file 'host)
+                           "|sudo:root@" (file-remote-p file 'host) ":"
+                           (file-remote-p file 'localname))
+                 (concat "/sudo:root@localhost:" file))))
+  (keymap-set embark-file-map "S" #'clw/sudo-find-file)
+  ;; 动作菜单 u：打开 package 的主页 URL
+  (keymap-set embark-package-map "u" #'embark-browse-package-url)
+
+  ;; Helm 式动作选择：minibuffer 里 C-<tab> 从候选列表切到动作列表
+  ;; （按名字搜动作，TAB 可搜到任意未绑键的动作），动作列表里 <tab> 返回候选
+  (defun clw/with-minibuffer-keymap (keymap)
+    "返回一个 around 函数，在 minibuffer 中临时叠加 KEYMAP。"
+    (lambda (fn &rest args)
+      (minibuffer-with-setup-hook
+          (lambda ()
+            (use-local-map (make-composed-keymap keymap (current-local-map))))
+        (apply fn args))))
+  (defvar clw/embark-completing-read-prompter-map
+    (let ((map (make-sparse-keymap)))
+      (define-key map (kbd "<tab>") #'abort-recursive-edit)
+      map))
+  (advice-add 'embark-completing-read-prompter :around
+              (clw/with-minibuffer-keymap clw/embark-completing-read-prompter-map))
+  (defun clw/embark-act-with-completing-read (&optional arg)
+    "用 completing-read 按名字选择 embark 动作执行（Helm 式）。"
+    (interactive "P")
+    (let* ((embark-prompter 'embark-completing-read-prompter)
+           (embark-indicators '(embark-minimal-indicator)))
+      (embark-act arg)))
+  (keymap-set vertico-map "C-<tab>" #'clw/embark-act-with-completing-read)
+  ;; collect buffer 中按键直接执行对应动作（无需先 embark-act）
+  (add-hook 'embark-collect-mode-hook #'embark-collect-direct-action-minor-mode))
 ;;@@EMBARK-CONSULT 联动 embark 与 consult
 (use-package embark-consult
   :hook
@@ -2591,7 +2751,12 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :commands diff-hl-magit-post-refresh
   :config
   (with-eval-after-load 'magit
-    (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh)))
+    (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
+  ;; feature 分支开发时，fringe 标记默认对照 HEAD 看不出全貌；把基准换成
+  ;; master 等目标分支更实用。r=全局基准 R=按项目 u=重置（C-x v 前缀下）
+  (keymap-set diff-hl-command-map "r" #'diff-hl-set-reference-rev)
+  (keymap-set diff-hl-command-map "R" #'diff-hl-set-reference-rev-in-project)
+  (keymap-set diff-hl-command-map "u" #'diff-hl-reset-reference-rev))
 ;;@@ magit
 (use-package magit
   :bind ("C-x g" . magit-status)
@@ -2773,6 +2938,52 @@ buffer 看 diff。"
 ;;@@ aggressive-indent
 (use-package aggressive-indent
   :hook (emacs-lisp-mode . aggressive-indent-mode))
+;;@@HIDESHOW 代码块折叠：Org 式一键循环（来源 karthinks.com "Simple folding with Hideshow"）
+;; Emacs 31+ 的 hideshow 对 *-ts-mode 原生支持（treesit 识别代码块），无需配各语言正则
+(defun hs-cycle (&optional level)
+  "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
+数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-TAB 俯瞰到第 3 层）。
+注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
+  (interactive "p")
+  (let (message-log-max
+        (inhibit-message t))
+    (if (= level 1)
+        (pcase last-command
+          ('hs-cycle
+           (hs-hide-level 1)
+           (setq this-command 'hs-cycle-children))
+          ('hs-cycle-children
+           ;; TODO: Fix this case. `hs-show-block' needs to be
+           ;; called twice to open all folds of the parent
+           ;; block.
+           (save-excursion (hs-show-block))
+           (hs-show-block)
+           (setq this-command 'hs-cycle-subtree))
+          ('hs-cycle-subtree
+           (hs-hide-block))
+          (_
+           (if (not (hs-already-hidden-p))
+               (hs-hide-block)
+             (hs-hide-level 1)
+             (setq this-command 'hs-cycle-children))))
+      (hs-hide-level level)
+      (setq this-command 'hs-hide-level))))
+
+(defun hs-global-cycle ()
+  "整个 buffer 折叠 ↔ 全展开切换。"
+  (interactive)
+  (pcase last-command
+    ('hs-global-cycle
+     (save-excursion (hs-show-all))
+     (setq this-command 'hs-global-show))
+    (_ (hs-hide-all))))
+
+(use-package hideshow
+  ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
+  :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
+          python-ts-mode) . hs-minor-mode)
+  :bind (("C-<tab>" . hs-cycle)
+         ("C-S-<tab>" . hs-global-cycle)))
 ;;@@ APHELEIA 保存时自动格式化，不移动光标
 (use-package apheleia
   :hook (prog-mode . apheleia-mode)
@@ -2876,6 +3087,43 @@ Combines project-x's session label display with the built-in
 (add-hook 'emacs-startup-hook #'clw/unbind-disabled-commands)
 
 ;;@@ 增强 C-x <num> 系列的 Window 管理功能
+;; C-x <right>/<left> 增强版：C-u 前缀时在另一窗口切换 buffer
+;; （来源 karthinks "The Emacs Window Management Almanac"）
+(defun clw/next-buffer (&optional arg)
+  "切换到下一个 buffer；C-u 前缀时在另一窗口切换。"
+  (interactive "P")
+  (if-let* (((equal arg '(4)))
+            (win (other-window-for-scrolling)))
+      (with-selected-window win
+        (next-buffer)
+        (setq prefix-arg current-prefix-arg))
+    (next-buffer arg)))
+(defun clw/previous-buffer (&optional arg)
+  "切换到上一个 buffer；C-u 前缀时在另一窗口切换。"
+  (interactive "P")
+  (if-let* (((equal arg '(4)))
+            (win (other-window-for-scrolling)))
+      (with-selected-window win
+        (previous-buffer)
+        (setq prefix-arg current-prefix-arg))
+    (previous-buffer arg)))
+(keymap-global-set "<remap> <next-buffer>" #'clw/next-buffer)
+(keymap-global-set "<remap> <previous-buffer>" #'clw/previous-buffer)
+;; 切换链进入 repeat-mode：n/p 连按循环，b 切换指定 buffer
+(defvar-keymap clw/buffer-cycle-map
+  :doc "buffer 切换 repeat 映射"
+  :repeat t
+  "n" #'clw/next-buffer
+  "p" #'clw/previous-buffer
+  "b" #'switch-to-buffer)
+
+;; C-x C-SPC (pop-global-mark) 跨窗口跳回标记处：走 display-buffer
+;; 而非 switch-to-buffer，落点窗口才正确（来源同上）
+(define-advice pop-global-mark (:around (pgm) clw/use-display-buffer)
+  "让 `pop-global-mark' 通过 `display-buffer' 选窗口跳转。"
+  (cl-letf (((symbol-function 'switch-to-buffer) #'pop-to-buffer))
+    (funcall pgm)))
+
 (defun clw/split-and-move-to-other-window (fun)
   (lambda (&optional arg)
     (interactive "P")
