@@ -1802,7 +1802,35 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 (use-package doom-modeline
   :defer t
   :hook after-init
-  )
+  :config
+  ;; ---- 性能优化（视觉零变化）----
+  ;; 1) 图标 memoize：doom-modeline-icon 无缓存，每帧对 mode-line 里每个
+  ;;    图标重新查 nerd-icons 表 + propertize；右对齐机制还会把右段整体
+  ;;    多格式化一遍（图标算两遍）。图标是纯函数，按参数缓存后 O(1)。
+  (defvar clw/dm-icon-cache (make-hash-table :test 'equal :size 64))
+  (define-advice doom-modeline-icon
+      (:around (orig icon-set icon-name unicode text &rest args) clw/cache)
+    (let ((key (list (display-graphic-p) icon-set icon-name unicode text args)))
+      (or (gethash key clw/dm-icon-cache)
+          (puthash key (apply orig icon-set icon-name unicode text args)
+                   clw/dm-icon-cache))))
+  (defvar clw/dm-buf-icon-cache (make-hash-table :test 'equal :size 32))
+  (define-advice doom-modeline-icon-for-buffer
+      (:around (orig) clw/cache)
+    (let ((key (list (display-graphic-p) major-mode
+                     (and buffer-file-name
+                          (file-name-extension buffer-file-name)))))
+      (or (gethash key clw/dm-buf-icon-cache)
+          (puthash key (funcall orig) clw/dm-buf-icon-cache))))
+  ;; 2) 'main 布局剔除恒空段（未安装的包/未开的 mode），每帧省十余次
+  ;;    :eval 空调用；保留全部有内容或按需出现的段（region/isearch/
+  ;;    tramp/compile/eglot/flymake/jinx/pyim 等），显示效果不变。
+  (doom-modeline-def-modeline 'main
+    '(eldoc bar window-state matches buffer-info remote-host
+            buffer-position word-count selection-info)
+    '(compilation misc-info project-name debug lsp spell minor-modes
+                  input-method indent-info buffer-encoding major-mode
+                  process vcs check)))
 ;;@@ MARKDOWN-MODE
 (use-package markdown-mode
   :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
@@ -2940,50 +2968,65 @@ buffer 看 diff。"
   :hook (emacs-lisp-mode . aggressive-indent-mode))
 ;;@@HIDESHOW 代码块折叠：Org 式一键循环（来源 karthinks.com "Simple folding with Hideshow"）
 ;; Emacs 31+ 的 hideshow 对 *-ts-mode 原生支持（treesit 识别代码块），无需配各语言正则
-(defun hs-cycle (&optional level)
-  "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
-数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-TAB 俯瞰到第 3 层）。
-注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
-  (interactive "p")
-  (let (message-log-max
-        (inhibit-message t))
-    (if (= level 1)
-        (pcase last-command
-          ('hs-cycle
-           (hs-hide-level 1)
-           (setq this-command 'hs-cycle-children))
-          ('hs-cycle-children
-           ;; TODO: Fix this case. `hs-show-block' needs to be
-           ;; called twice to open all folds of the parent
-           ;; block.
-           (save-excursion (hs-show-block))
-           (hs-show-block)
-           (setq this-command 'hs-cycle-subtree))
-          ('hs-cycle-subtree
-           (hs-hide-block))
-          (_
-           (if (not (hs-already-hidden-p))
-               (hs-hide-block)
-             (hs-hide-level 1)
-             (setq this-command 'hs-cycle-children))))
-      (hs-hide-level level)
-      (setq this-command 'hs-hide-level))))
-
-(defun hs-global-cycle ()
-  "整个 buffer 折叠 ↔ 全展开切换。"
-  (interactive)
-  (pcase last-command
-    ('hs-global-cycle
-     (save-excursion (hs-show-all))
-     (setq this-command 'hs-global-show))
-    (_ (hs-hide-all))))
-
 (use-package hideshow
   ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
   :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
           python-ts-mode) . hs-minor-mode)
   :bind (("C-<tab>" . hs-cycle)
-         ("C-S-<tab>" . hs-global-cycle)))
+         ("C-S-<tab>" . hs-global-cycle))
+  ;; :config 里定义的命令必须列在 :commands 生成 autoload 桩，
+  ;; 否则 hideshow 未加载时按键 = void-function（惰性加载时序问题）
+  :commands (hs-cycle hs-global-cycle)
+  :config
+  (defun clw/hs-ensure ()
+    "确保 hideshow 已加载且 `hs-minor-mode' 开启。
+当前 major-mode 无注释语法（如 fundamental-mode）而拒绝开启时返回 nil。"
+    (require 'hideshow)
+    (unless (bound-and-true-p hs-minor-mode)
+      (hs-minor-mode 1))
+    (bound-and-true-p hs-minor-mode))
+
+  (defun hs-cycle (&optional level)
+    "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
+数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-<tab> 俯瞰到第 3 层）。
+注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
+    (interactive "p")
+    (unless (clw/hs-ensure)
+      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
+    (let (message-log-max
+          (inhibit-message t))
+      (if (= level 1)
+          (pcase last-command
+            ('hs-cycle
+             (hs-hide-level 1)
+             (setq this-command 'hs-cycle-children))
+            ('hs-cycle-children
+             ;; TODO: Fix this case. `hs-show-block' needs to be
+             ;; called twice to open all folds of the parent
+             ;; block.
+             (save-excursion (hs-show-block))
+             (hs-show-block)
+             (setq this-command 'hs-cycle-subtree))
+            ('hs-cycle-subtree
+             (hs-hide-block))
+            (_
+             (if (not (hs-already-hidden-p))
+                 (hs-hide-block)
+               (hs-hide-level 1)
+               (setq this-command 'hs-cycle-children))))
+        (hs-hide-level level)
+        (setq this-command 'hs-hide-level))))
+
+  (defun hs-global-cycle ()
+    "整个 buffer 折叠 ↔ 全展开切换。"
+    (interactive)
+    (unless (clw/hs-ensure)
+      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
+    (pcase last-command
+      ('hs-global-cycle
+       (save-excursion (hs-show-all))
+       (setq this-command 'hs-global-show))
+      (_ (hs-hide-all)))))
 ;;@@ APHELEIA 保存时自动格式化，不移动光标
 (use-package apheleia
   :hook (prog-mode . apheleia-mode)

@@ -27,6 +27,7 @@ autoload -Uz _zinit
 bindkey -e
 setopt extendedglob nomatch notify
 unsetopt beep
+stty -ixon
 
 COMPLETION_WAITING_DOTS="true"
 ENABLE_CORRECTION="true"
