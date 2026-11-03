@@ -697,8 +697,10 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 (save-place-mode 1)
 ;;@@WINNER 保留窗口配置记录，可回退和前进
 (use-package winner
+  ;; :bind 隐含 :defer，故用 after-init 钩子触发加载并启用（勿在 :config 里
+  ;; 再调一次 winner-mode：无参调用是 toggle，会把钩子刚打开的又关掉）
+  :hook (after-init . winner-mode)
   :config
-  (winner-mode 1)
   ;; 给快捷键添加 repeat-mode 支持
   (defvar clw/winner-repeat-map
     (let ((map (make-sparse-keymap)))
@@ -1144,7 +1146,8 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
          (js-base-mode . eglot-ensure)
          (typescript-ts-base-mode . eglot-ensure))
   :bind (:map eglot-mode-map
-         ;; 用 C-c e 前缀：C-c l 与全局 org-store-link 冲突
+         ;; 原配置用 C-c l 前缀，会把全局 org-store-link 挤成前缀而不可达；
+         ;; 改用 C-c e（eglot 自身未占用该前缀）
          ("C-c e a" . eglot-code-actions)
          ("C-c e r" . eglot-rename)
          ("C-c e f" . eglot-format)
@@ -1815,7 +1818,7 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;;@@ MARKDOWN-MODE
 ;; .md/.markdown/.mkd/.mdown/.mkdn/.mdwn 由包自带 autoload 覆盖，这里只补 .mdx
 (use-package markdown-mode
-  :mode "\\.mdx\\'")
+  :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
 (use-package ace-window
   :bind (("M-o" . ace-window)
@@ -1954,18 +1957,18 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (pyim-default-scheme 'microsoft-shuangpin))
 ;;@@ VERTICO 更好的 icomplete 和 ido
 (use-package vertico
-  ;; 目录导航（vertico-directory，自带扩展）：RET 进目录、DEL 删路径层级
-  :bind (:map vertico-map
-         ("RET" . vertico-directory-enter)
-         ("DEL" . vertico-directory-delete-char)
-         ("M-DEL" . vertico-directory-delete-word))
-  :hook (rfn-eshadow-update-overlay . vertico-directory-tidy)
   :config
   (vertico-mode 1)
   (setopt vertico-resize nil)
   ;; 两个自带扩展必须 require 才生效
   (require 'vertico-sort)
-  (require 'vertico-directory))
+  (require 'vertico-directory)
+  ;; 目录导航键位必须在 vertico（及 vertico-map）加载后绑定：
+  ;; 放进 :bind 会在 require 之前求值，vertico-map 未定义（void-variable）
+  (keymap-set vertico-map "RET" #'vertico-directory-enter)
+  (keymap-set vertico-map "DEL" #'vertico-directory-delete-char)
+  (keymap-set vertico-map "M-DEL" #'vertico-directory-delete-word)
+  (add-hook 'rfn-eshadow-update-overlay-hook #'vertico-directory-tidy))
 ;;@@ marginalia
 (use-package marginalia
   :init (marginalia-mode))
@@ -2524,6 +2527,9 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@POPPER 管理弹出的各种临时 buffer
 ;; 这样就不会打破 Window 布局
 (use-package popper
+  ;; :bind 隐含 :defer，故用 after-init 钩子触发加载并启用（勿在 :config 里
+  ;; 再调一次 popper-mode：无参调用是 toggle，会把钩子刚打开的又关掉）
+  :hook (after-init . popper-mode)
   :bind (("C-`" . popper-toggle)
          ("M-`" . popper-cycle)
          ("C-M-`" . popper-toggle-type))
@@ -2539,7 +2545,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
             shell-mode "^\\*shell.*\\*"
             "\\*xref\\*"))
   :config
-  (popper-mode 1)
   (popper-echo-mode 1))
 ;;@@ENVRC Linux 上管理开发环境
 ;; 可以执行 `envrc-allow' 和 `envrc-deny' 来开启和关闭某目录下的 .envrc
@@ -2684,8 +2689,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;; 耗时对改动数量不敏感（hunk 全部懒加载，见下方 TAB 懒加载 hunk）。
 (use-package magit-fast
   :after magit
-  :bind (:map magit-status-mode-map
-         ("<return>" . clw/magit-fast-diff))
   :custom
   ;; 默认颜色表面向深色主题（Catppuccin 粉彩前景），浅色背景看不清；改 :inherit 随主题
   (magit-fast-status-alist
@@ -2697,6 +2700,12 @@ This differs from Avy's goto-char-timer in how it processes parens."
      ("U" "unmerged" . (:inherit font-lock-keyword-face))))
   :config
   (magit-fast-mode 1)
+  ;; magit-status-mode-map 由 magit-status.el 在首次打开 status 时创建，
+  ;; 直接 :bind 会绑到尚不存在的 map（或绑完又被新建的 map 覆盖），
+  ;; 故等 magit-status 加载后再绑定。用 "RET"(13) 而非 "<return>"：
+  ;; 实际 Return 键发送的是 13，magit 也绑在 13 上
+  (with-eval-after-load 'magit-status
+    (keymap-set magit-status-mode-map "RET" #'clw/magit-fast-diff))
   ;; commit 后不自动展示 diff（server-switch 场景省开销）；git 调用前不逐
   ;; buffer 保存（与 magit-save-repository-buffers nil 互补）
   (remove-hook 'server-switch-hook 'magit-commit-diff)
