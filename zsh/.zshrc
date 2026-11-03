@@ -24,7 +24,9 @@ autoload -Uz _zinit
 # ==============================================================================
 # ZSH 原生基础环境配置
 # ==============================================================================
-bindkey -e
+# PATH 是 path 数组的联动变量：加 -U 让两者自动去重，
+# 避免重复 source ~/.zshrc 时同一目录被反复追加
+typeset -U path PATH
 setopt extendedglob nomatch notify
 unsetopt beep
 # 关闭流控（C-s/C-q 不再冻结终端）。用 zsh 原生选项代替 `stty -ixon`：
@@ -32,9 +34,6 @@ unsetopt beep
 # "Inappropriate ioctl for device"，这条 stderr 会触发 p10k instant prompt
 # 的启动警告；zsh 选项在无终端时静默跳过。
 setopt no_flow_control
-
-COMPLETION_WAITING_DOTS="true"
-ENABLE_CORRECTION="true"
 
 # OMZ 公共库（去掉 completion.zsh —— compinit 统一由下方 zsh-syntax-highlighting 入口执行）
 zinit lucid for OMZ::lib/key-bindings.zsh
@@ -100,6 +99,12 @@ export FZF_ALT_C_OPTS="--preview 'eza -1 --color=always {}/'"
 zstyle ':completion:*:git-checkout:*' sort false
 # set descriptions format to enable group support
 zstyle ':completion:*:descriptions' format '[%d]'
+# 补全列表配色依赖 LS_COLORS。干净环境下（直接登录 zsh，未继承父 shell 的
+# LS_COLORS）变量为空，zstyle 会注册成空值导致列表无色；用 dircolors 按默认
+# 数据库生成一份（已有时不覆盖；系统无 dircolors 时跳过）。
+if [[ -z $LS_COLORS ]] && (( $+commands[dircolors] )); then
+  eval "$(dircolors -b)"
+fi
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 # force zsh not to show completion menu, which allows fzf-tab to capture the unambiguous prefix
 zstyle ':completion:*' menu no
@@ -123,9 +128,12 @@ zstyle ':fzf-tab:*' switch-group '<' '>'
 # ==============================================================================
 zinit ice lucid wait"1" from"gh-r" as"program" pick"eza" bpick"*x86_64-unknown-linux-gnu.tar.gz"
 zinit light eza-community/eza
-alias ls='eza'
-alias ll='eza -l --git'
-alias lt='eza -T'
+# eza 由 zinit 安装：未装好（首次下载失败）时保留系统 ls，避免 alias 指向不存在的命令
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza'
+  alias ll='eza -l --git'
+  alias lt='eza -T'
+fi
 alias win_ssh='/mnt/c/Windows/System32/OpenSSH/ssh.exe'
 alias win_scp='/mnt/c/Windows/System32/OpenSSH/scp.exe'
 
@@ -163,7 +171,8 @@ setopt HIST_FIND_NO_DUPS       # ctrl+r 搜索时跳过重复项
 
 export EDITOR="emacs -Q -nw -l ${HOME}/.emacs.d/init-mini.el"
 export COLORTERM=truecolor
-alias emacs-cli="$EDITOR"
+# 用函数而非别名：别名在定义时就会展开 $EDITOR，之后改 EDITOR 不会跟随
+emacs-cli() { ${=EDITOR} "$@"; }
 
 # 加载p10k自定义配置
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
@@ -226,7 +235,8 @@ alias ports='ss -tulnp'
 alias serve='python3 -m http.server 8000'
 
 # ---------- WSL 专属（自动检测，Windows/真机里不生效） ----------
-if grep -qi microsoft /proc/version 2>/dev/null; then
+# 用 zsh 内建读文件匹配，避免每次启动 fork 一个 grep
+if [[ -r /proc/version && $(</proc/version) == *[Mm]icrosoft* ]]; then
     alias expl='/mnt/c/Windows/explorer.exe .'
     alias clip='/mnt/c/Windows/System32/clip.exe'
     alias open='/mnt/c/Windows/explorer.exe'
