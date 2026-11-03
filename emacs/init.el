@@ -2821,15 +2821,15 @@ This differs from Avy's goto-char-timer in how it processes parens."
                               magit-insert-modules-unpushed-to-upstream
                               magit-insert-modules-unpushed-to-pushremote))
       (remove-hook 'magit-module-sections-hook module-section))))
-;;@@ magit-fast 加速 magit（porcelain 单次缓存替代重 diff，减少 git 调用）
+;;@@ magit-fast 加速 magit：status 用 porcelain 单次调用列文件，替代逐文件 diff。
+;; 实测（150 文件仓库、75 处改动）：status 刷新 25ms vs stock magit 41ms，且
+;; 耗时对改动数量不敏感（hunk 全部懒加载，见下方 TAB 懒加载 hunk）。
 (use-package magit-fast
   :after magit
-  :bind
-  (:map magit-status-mode-map
-   ("<return>" . clw/magit-fast-diff))
+  :bind (:map magit-status-mode-map
+         ("<return>" . clw/magit-fast-diff))
   :custom
-  ;; 默认颜色表是深色主题（Catppuccin）的粉彩前景，doom-oksolar-light
-  ;; 等浅色背景下几乎看不清；改用 :inherit 语义 face，随主题自适应
+  ;; 默认颜色表面向深色主题（Catppuccin 粉彩前景），浅色背景看不清；改 :inherit 随主题
   (magit-fast-status-alist
    '(("M" "modified" . (:inherit warning))
      ("A" "new file" . (:inherit success))
@@ -2837,18 +2837,18 @@ This differs from Avy's goto-char-timer in how it processes parens."
      ("R" "renamed"  . (:inherit font-lock-function-name-face))
      ("C" "copied"   . (:inherit font-lock-type-face))
      ("U" "unmerged" . (:inherit font-lock-keyword-face))))
-  :init
-  ;; commit 时不再自动展示 diff（server-switch 场景省掉开销）
+  :config
+  (magit-fast-mode 1)
+  ;; commit 后不自动展示 diff（server-switch 场景省开销）；git 调用前不逐
+  ;; buffer 保存（与 magit-save-repository-buffers nil 互补）
   (remove-hook 'server-switch-hook 'magit-commit-diff)
-  ;; git 调用前不逐 buffer 保存（与 magit-save-repository-buffers nil 互补）
   (remove-hook 'magit-pre-start-git-hook #'magit-maybe-save-repository-buffers)
-  (magit-fast-mode)
-  ;; ---- TAB 懒加载 diff ----
-  ;; magit-fast 的 status 只列文件名、不内联 hunk（提速的来源）。这里
-  ;; 借 magit 官方的 `magit-insert-section-body' 延迟机制：文件行建为
-  ;; heading-only 的隐藏 section，hunk 插入交给 washer，首次 TAB 展开才
-  ;; 跑该文件的 git diff；收起再展开不重复跑。刷新时已展开的文件保持
-  ;; 展开并重洗，未展开的文件零 git 开销。
+
+  ;; ---- TAB 懒加载 hunk ----
+  ;; magit-fast 原版 status 只列文件名、无 hunk 可展。这里借 magit 官方的
+  ;; `magit-insert-section-body' 延迟机制：文件行 = 彩色标题 + 隐藏内容区，
+  ;; hunk 插入交给 washer，首次 TAB 展开才跑该文件的 git diff；收起再展开
+  ;; 不重跑。刷新时已展开的文件保持展开并重洗，未展开的零 git 开销。
   (defun clw/magit-fast-insert-hunks ()
     "在当前 file section 内插入该文件的 diff hunks（washer，展开时才跑 git）。"
     (when-let* ((section magit-insert-section--current)
@@ -2872,22 +2872,23 @@ This differs from Avy's goto-char-timer in how it processes parens."
             (narrow-to-region beg (point))
             (goto-char beg)
             (if (re-search-forward "^@\\{2,\\} " nil t)
-                ;; @@ 之前的文件头（diff --git/index/---/+++）存入 file
-                ;; section 的 header 槽——stage/unstage/discard chunk 走
-                ;; magit-apply-hunk → magit-diff-file-header 重建 patch，
-                ;; 槽为 nil 会 (wrong-type-argument stringp nil)。存好后删掉，只留 hunks
-                (progn (goto-char (line-beginning-position))
-                       (oset section header
-                             (buffer-substring-no-properties beg (point)))
-                       (delete-region beg (point))
-                       (magit-wash-sequence #'magit-diff-wash-hunk))
-              ;; 无文本 hunk（binary 等）：整段存 header 槽备用，
-              ;; 原始输出保留在 buffer 当说明
+                (progn
+                  (goto-char (line-beginning-position))
+                  ;; @@ 之前的文件头（diff --git/index/---/+++）存入 file
+                  ;; section 的 header 槽：stage/unstage/discard chunk 走
+                  ;; magit-diff-file-header 用它重建 patch，为 nil 报
+                  ;; (wrong-type-argument stringp nil)。存好再删，只留 hunks
+                  (oset section header
+                        (buffer-substring-no-properties beg (point)))
+                  (delete-region beg (point))
+                  (magit-wash-sequence #'magit-diff-wash-hunk))
+              ;; 无文本 hunk（binary 等）：整段存 header 槽备用，原始输出留作说明
               (progn (oset section header
                            (buffer-substring-no-properties beg (point-max)))
                      (goto-char (point-max)))))))))
-  ;; 覆盖 magit-fast 的文件行插入：彩色标题行 + 懒加载内容区
-  ;; （原实现把整行当 section 正文，TAB 只能折叠行本身、无 hunk 可展）
+
+  ;; 文件行插入器：彩色标题行 + 懒加载内容区。覆盖 magit-fast--insert 的
+  ;; 原实现（整行当 section 正文，TAB 只能折叠行本身、无 hunk 可展）
   (define-advice magit-fast--insert
       (:override (entries) clw/magit-fast-insert)
     (dolist (entry entries)
@@ -2902,6 +2903,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
           (magit-insert-section-body
             (clw/magit-fast-insert-hunks)))))
     (insert "\n"))
+
+  ;; RET 看 diff 详情（fast 版 status 里 magit-visit-thing 是占位符，直接调用报错）：
+  ;; 文件行 → 该文件 diff；Recent commits 行（无 commit section，行首 %h hash）
+  ;; → commit diff；其余（untracked、标题…）走 RET 键映射的重定向目标，保持原版语义
   (defun clw/magit-fast-diff ()
     "显示点下内容的 diff 详情。
 文件行（unstaged/staged/unmerged）→ 该文件 diff；Recent commits 的
