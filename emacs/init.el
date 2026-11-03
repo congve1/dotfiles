@@ -71,29 +71,15 @@
 (defgroup clw nil
   "配置文件中的选项，可以用来保存一些特定于机器的路径或选项"
   :group 'emacs)
-(defmacro clw/defcustom (symbol value doc &rest args)
-  "保证使用 `clw/defcustom'定义的option位于`clw'组内"
-  (declare (doc-string 3) (debug (name body))
-           (indent defun))
-  (let ((args (if (plist-get args :group) args
-                (cons :group (cons ''clw args)))))
-    `(defcustom ,symbol ,value ,doc ,@args))
-  )
 (defun clw/customize ()
   (interactive)
   (customize-group 'clw))
-;;@@ 定义一些custom变量
-(clw/defcustom clw/use-pixel-scroll nil
+;;@@ 定义一些 custom 变量
+(defcustom clw/use-pixel-scroll t
   "是否使用像素滚动"
-  :type 'boolean)
+  :type 'boolean
+  :group 'clw)
 
-;;@@ 查看配置中需要手动配置的部分
-(defun clw/occur-te ()
-  "使用`occur' 列出配置文件中需要手动配置的位置 ;;te"
-  (interactive)
-  (with-current-buffer (get-file-buffer (expand-file-name "init.el" user-emacs-directory))
-    (occur "^ *;;te"))
-  )
 ;;@@ 设置 changelog file 相关的一些选项
 (setopt add-log-full-name "congluwen")
 (setopt add-log-mailing-address "congve1@live.com")
@@ -138,9 +124,9 @@
 (setopt create-lockfiles nil)
 ;; 使用`save-some-buffers' 时默认保存所有文件
 (defun clw/save-some-buffers ()
-  "指定arg参数，保存时不弹出提示"
+  "保存所有 buffer，不弹出提示"
   (interactive)
-  (save-some-buffers :clw/nowquery))
+  (save-some-buffers t))
 (bind-key "C-x s" #'clw/save-some-buffers)
 ;;@@ 设置默认的 major-mode 为 `text-mode'
 (setq-default major-mode 'text-mode)
@@ -484,7 +470,7 @@ If in WSL, try to get gateway via system commands."
 ;;@@ ELEC_INDENT
 (use-package elec-pair
   :config
-  (electric-indent-mode)
+  (electric-indent-mode 1)
   ;; < > 配对 (Rust 泛型)，| | 配对 (Rust 闭包)
   (add-to-list 'electric-pair-pairs '(?< . ?>))
   (add-to-list 'electric-pair-pairs '(?| . ?|)))
@@ -728,9 +714,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   :bind (("C-c l" . org-store-link)
          ("C-c a" . org-agenda)
          ("C-c c" . org-capture)
-         ("C-\\"  . clw/insert-zws)
          :map org-mode-map
          ("C-c v" . visible-mode)
+         ;; 插入零宽空格（CJK 换行控制）。只占用 org-mode 内的键，
+         ;; 全局 C-\ 保留给 `toggle-input-method'（pyim 切换）
+         ("C-c z" . clw/insert-zws)
          :map org-src-mode-map
          ("C-c C-c" . org-edit-src-exit))
   :hook ((org-mode . visual-line-mode)
@@ -1156,10 +1144,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
          (js-base-mode . eglot-ensure)
          (typescript-ts-base-mode . eglot-ensure))
   :bind (:map eglot-mode-map
-         ("C-c l a" . eglot-code-actions)
-         ("C-c l r" . eglot-rename)
-         ("C-c l f" . eglot-format)
-         ("C-c l d" . eldoc))
+         ;; 用 C-c e 前缀：C-c l 与全局 org-store-link 冲突
+         ("C-c e a" . eglot-code-actions)
+         ("C-c e r" . eglot-rename)
+         ("C-c e f" . eglot-format)
+         ("C-c e d" . eldoc))
   :custom
   (eglot-report-progress nil)
   (eglot-autoshutdown t)
@@ -1347,9 +1336,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (add-hook 'typescript-ts-base-mode-hook
             (lambda () (setq-local fill-column 80))))
 
-;;@@DABBREV 根据 buffer 内容进行补全
-;; tbd
-
 ;;@@ISPELL, 30 里面的某些设置
 (setopt text-mode-ispell-word-completion nil)
 ;;@@PAREN 配置 Emacs 内置的括号显示功能
@@ -1472,10 +1458,10 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
     "minibuffer 激活时返回 t，以抑制 `message' 的回显。"
     (and (active-minibuffer-window) t))
   (add-hook 'set-message-functions #'clw/inhibit-message-in-minibuffer)
-  ;; `inhibit-message' 按 `inhibit-message-regexps' 正则抑制，与上面的
-  ;; minibuffer 抑制共存（二者任一返回非 nil 即抑制）。注意它必须位于
-  ;; `set-message-functions' 首位才能生效（add-hook 前插，故后加的在首位）。
-  (add-hook 'set-message-functions #'inhibit-message))
+  ;; `inhibit-message' 已在 early-init 装入列表；这里去重并把它提到首位
+  ;; （文档要求位于首位才能抑制匹配 `inhibit-message-regexps' 的消息）
+  (setq set-message-functions
+        (cons 'inhibit-message (delq 'inhibit-message set-message-functions))))
 ;;@@ simple
 (use-package simple
   :bind
@@ -1603,9 +1589,6 @@ Lisp function does not specify a special indentation."
                                            '(1))))))
       (set-face-attribute 'fill-column-indicator nil :stipple stipple))))
 
-
-
-
 ;;@3 外部安装的 elisp 包
 ;;@@ 指定需要安装的包
 (setopt package-selected-packages
@@ -1627,7 +1610,6 @@ Lisp function does not specify a special indentation."
           consult-eglot
           wgrep ; 基于 grep 的批量替换工具
           dired-hist ; dired 目录历史导航（l/r）
-          devdocs ; 提供来自 devdocs 的文档支持
           diminish ; 让某些 mode 标识不在 modeline 显示
           ;;yasnippet ; 强大的代码模板工具
           breadcrumb ; 面包屑导航
@@ -1640,7 +1622,6 @@ Lisp function does not specify a special indentation."
           eglot-tempel ; eglot LSP snippet 桥接 tempel
           cape ; 为 corfu 提供一些后端
           envrc ; 类似 buffer-env
-          powershell ; 在 Emacs 中打开 powershell, windows
           p-search ; 某种搜索工具
           doom-themes
           doom-modeline
@@ -1832,8 +1813,9 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                   input-method indent-info buffer-encoding major-mode
                   process vcs check)))
 ;;@@ MARKDOWN-MODE
+;; .md/.markdown/.mkd/.mdown/.mkdn/.mdwn 由包自带 autoload 覆盖，这里只补 .mdx
 (use-package markdown-mode
-  :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
+  :mode "\\.mdx\\'")
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
 (use-package ace-window
   :bind (("M-o" . ace-window)
@@ -1972,20 +1954,18 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (pyim-default-scheme 'microsoft-shuangpin))
 ;;@@ VERTICO 更好的 icomplete 和 ido
 (use-package vertico
-  :config
-  (vertico-mode 1)
-  (setopt vertico-resize 'nil))
-;;@@ vertico-sort
-(use-package vertico-sort
-  :after vertico)
-;;@@ vertico-directory 目录导航（vertico 自带，无需额外安装）
-(use-package vertico-directory
-  :after vertico
+  ;; 目录导航（vertico-directory，自带扩展）：RET 进目录、DEL 删路径层级
   :bind (:map vertico-map
          ("RET" . vertico-directory-enter)
          ("DEL" . vertico-directory-delete-char)
          ("M-DEL" . vertico-directory-delete-word))
-  :hook (rfn-eshadow-update-overlay . vertico-directory-tidy))
+  :hook (rfn-eshadow-update-overlay . vertico-directory-tidy)
+  :config
+  (vertico-mode 1)
+  (setopt vertico-resize nil)
+  ;; 两个自带扩展必须 require 才生效
+  (require 'vertico-sort)
+  (require 'vertico-directory))
 ;;@@ marginalia
 (use-package marginalia
   :init (marginalia-mode))
@@ -2172,66 +2152,6 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
           (current-prefix-arg (if arg 4)))
       (call-interactively 'avy-isearch)))
 
-  (defun clw/avy--read-char-2 ()
-    "Read two characters from the minibuffer, return a 2-char string.
-RET is converted to newline; C-g quits; backspace on the second char
-re-reads from the first char."
-    (let (c1 c2)
-      (while (null c1)
-        (let ((c (read-char "char 1: " t)))
-          (cond
-           ((memq c '(?\s ?\b 7)) (keyboard-quit))
-           (t (setq c1 c)))))
-      (while (null c2)
-        (let ((c (read-char "char 2: " t)))
-          (cond
-           ((memq c '(?\r 7)) (keyboard-quit))
-           ((memq c '(8 127)) (setq c1 nil c2 nil))
-           (t (setq c2 c)))))
-      (when (eq c1 ?\r) (setq c1 ?\n))
-      (when (eq c2 ?\r) (setq c2 ?\n))
-      (string c1 c2)))
-
-  (defun clw/avy-next-char-2 (&optional str2 arg)
-    "Go to the next occurrence of two characters"
-    (interactive (list
-                  (clw/avy--read-char-2)
-                  current-prefix-arg))
-    (let ((echo-keystrokes nil))
-      (push-mark (point) t)
-      (if (search-forward str2 nil t
-                          (+ (if (looking-at (regexp-quote str2))
-                                 1 0)
-                             (or arg 1)))
-          (backward-char 2)
-        (pop-mark)))
-
-    (set-transient-map
-     (let ((map (make-sparse-keymap)))
-       (define-key map (kbd ";") (lambda (&optional arg) (interactive)
-                                   (clw/avy-next-char-2 str2 arg)))
-       (define-key map (kbd ",") (lambda (&optional arg) (interactive)
-                                   (clw/avy-previous-char-2 str2 arg)))
-       map)))
-
-  (defun clw/avy-previous-char-2 (&optional str2 arg)
-    "Go to the previous occurrence of two characters"
-    (interactive (list
-                  (clw/avy--read-char-2)
-                  current-prefix-arg))
-    (let ((echo-keystrokes nil))
-      (push-mark (point) t)
-      (unless (search-backward str2 nil t (or arg 1))
-        (pop-mark)))
-
-    (set-transient-map
-     (let ((map (make-sparse-keymap)))
-       (define-key map (kbd ";") (lambda (&optional arg) (interactive)
-                                   (clw/avy-next-char-2 str2 arg)))
-       (define-key map (kbd ",") (lambda (&optional arg) (interactive)
-                                   (clw/avy-previous-char-2 str2 arg)))
-       map)))
-
   (defun clw/avy-copy-line-no-prompt (arg)
     (interactive "p")
     (avy-copy-line arg)
@@ -2239,56 +2159,6 @@ re-reads from the first char."
     (zap-to-char 1 32)
     (delete-forward-char 1)
     (move-end-of-line 1))
-
-  (defun clw/avy-link-hint (&optional win)
-    "Find all visible buttons and links in window WIN and open one with Avy.
-
-The current window is chosen if WIN is not specified."
-    (interactive)
-    (with-selected-window (or win
-                              (setq win (selected-window)))
-      (let* ((avy-single-candidate-jump t) match all-buttons)
-
-        ;; SHR links
-        (save-excursion
-          (goto-char (window-start))
-          (while (and
-                  (<= (point) (window-end))
-                  (setq match
-                        (text-property-search-forward 'category 'shr t nil)))
-            (let ((st (prop-match-beginning match)))
-              (push
-               `((,st . ,(1+ st)) . ,win)
-               all-buttons))))
-
-        ;; Collapsed sections
-        (thread-last (overlays-in (window-start) (window-end))
-                     (mapc (lambda (ov)
-                             (when (or (overlay-get ov 'button)
-                                       (eq (overlay-get ov 'face)
-                                           'link))
-                               (let ((st (overlay-start ov)))
-                                 (push
-                                  `((,st . ,(1+ st)) . ,win)
-                                  all-buttons))))))
-
-        (when-let*
-            ((_ all-buttons)
-             (avy-action
-              (lambda (pt)
-                (goto-char pt)
-                (let (b link)
-                  (cond
-                   ((and (setq b (button-at (1+ pt)))
-                         (button-type b))
-                    (button-activate b))
-                   ((shr-url-at-point pt)
-                    (shr-browse-url))
-                   ((setq link (or (get-text-property pt 'shr-url)
-                                   (thing-at-point 'url)))
-                    (browse-url link)))))))
-          (let ((cursor-type nil))
-            (avy-process all-buttons))))))
 
   (custom-set-faces
    '(avy-lead-face
@@ -2496,16 +2366,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
       (backward-char 1)
       (embark-act arg)))
   (keymap-set help-map "SPC" #'clw/embark-on-last-message)
-
-  ;; helm/ido 式：用 completing-read 选择动作
-  ;; 记不住动作快捷键时很有用：M-x clw/embark-act-with-completing-read
-  ;; 会用 vertico 列出所有可用动作，选中即执行
-  (defun clw/embark-act-with-completing-read (&optional arg)
-    "用 `completing-read' 选择并执行 embark 动作。"
-    (interactive "P")
-    (let ((embark-prompter 'embark-completing-read-prompter)
-          (embark-indicators '(embark-minimal-indicator)))
-      (embark-act arg)))
 
   ;; 作用于“当前 buffer 对应的文件”
   ;; 让任何 buffer 都能用 embark 作用于其对应文件：在代码中按 C-. 后用 . 循环到
@@ -2804,12 +2664,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ;; 扭曲 motion/TAB 行为，这里 buffer-local 置 nil（全局值保持不变）
   :hook (magit-status-mode . (lambda () (setq-local long-line-threshold nil)))
   :init
-  (defmacro aquamacs/fullframe-mode (mode)
-    "Configure buffers that open in MODE to start out full-frame."
-    `(add-to-list 'display-buffer-alist
-                  (cons (cons 'major-mode ,mode)
-                        (list 'display-buffer-full-frame))))
-  (aquamacs/fullframe-mode 'magit-status-mode)
+  ;; magit status buffer 全 frame 打开
+  (add-to-list 'display-buffer-alist
+               (cons (cons 'major-mode 'magit-status-mode)
+                     (list 'display-buffer-full-frame)))
   :commands magit-add-section-hook
   :config
   (put 'magit-clean 'disabled nil)
