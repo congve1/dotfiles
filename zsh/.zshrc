@@ -27,7 +27,11 @@ autoload -Uz _zinit
 bindkey -e
 setopt extendedglob nomatch notify
 unsetopt beep
-stty -ixon
+# 关闭流控（C-s/C-q 不再冻结终端）。用 zsh 原生选项代替 `stty -ixon`：
+# stty 作用于 stdin，非终端场景（管道、部分 IDE/集成终端拉起 zsh）会报
+# "Inappropriate ioctl for device"，这条 stderr 会触发 p10k instant prompt
+# 的启动警告；zsh 选项在无终端时静默跳过。
+setopt no_flow_control
 
 COMPLETION_WAITING_DOTS="true"
 ENABLE_CORRECTION="true"
