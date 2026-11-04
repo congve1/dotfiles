@@ -1974,13 +1974,16 @@ Cached per repository root and invalidated when .git/HEAD changes."
       "  "))
 
   (defun nn-mode-line-set ()
-    "Install `nn-mode-line-format' and its caches in the current buffer."
-    (nn-mode-line--coding-refresh)
-    (when (fboundp 'nn-mode-line--flymake-refresh)
-      (nn-mode-line--flymake-refresh))
-    (when (fboundp 'nn-mode-line--eglot-refresh)
-      (nn-mode-line--eglot-refresh))
-    (setq-local mode-line-format nn-mode-line-format))
+    "Install `nn-mode-line-format' and its caches in the current buffer.
+Magit 的 buffer 已有自己的 header/上下文，不再额外占一行 mode line。"
+    (if (derived-mode-p 'magit-mode)
+        (setq-local mode-line-format nil)
+      (nn-mode-line--coding-refresh)
+      (when (fboundp 'nn-mode-line--flymake-refresh)
+        (nn-mode-line--flymake-refresh))
+      (when (fboundp 'nn-mode-line--eglot-refresh)
+        (nn-mode-line--eglot-refresh))
+      (setq-local mode-line-format nn-mode-line-format)))
 
   ;; 所有 buffer 都使用该格式；缓存由 major-mode 变化时填充
   (setq-default mode-line-format nn-mode-line-format)
