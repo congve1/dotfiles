@@ -49,7 +49,9 @@
   (setq gc-cons-percentage 0.5)
   (add-hook 'emacs-startup-hook
             (lambda ()
-              (garbage-collect)
+              ;; 启动时立刻 GC 会阻塞首屏（实测 ~15ms），推迟到空闲；
+              ;; 期间若自然触发 GC 也无害
+              (run-with-idle-timer 1 nil #'garbage-collect)
               (setq gc-cons-threshold normal-gc-cons-threshold)
               (setq gc-cons-percentage 0.1)
               (when (boundp 'clw/init-file-name-handler-alist)
@@ -81,9 +83,12 @@
   :group 'clw)
 
 ;;@@ 设置 changelog file 相关的一些选项
-(setopt add-log-full-name "congluwen")
-(setopt add-log-mailing-address "congve1@live.com")
-(setopt add-log-time-zone-rule t) ; 使用 UTC+0 时间
+;; 延迟到 add-log 真正被使用时再设置：setopt 会为检查自定义变量而加载
+;; add-log.el（约 12ms），启动阶段没必要。
+(with-eval-after-load 'add-log
+  (setopt add-log-full-name "congluwen")
+  (setopt add-log-mailing-address "congve1@live.com")
+  (setopt add-log-time-zone-rule t)) ; 使用 UTC+0 时间
 ;;@@ 启动时不显示 GNU Emacs startup 页面
 (setopt inhibit-startup-screen t)
 (setopt initial-scratch-message (format ";;Emacs %s" emacs-version))
@@ -252,9 +257,12 @@
 ;;@@ WSL 下用 wslview 打开 URL/文件
 ;; WSL 内 xdg-open 通常缺失，org 链接、embark 的 x（外部打开）都需要它。
 ;; 依赖 wslu 包：pacman -S wslu
+;; 用 with-eval-after-load：setopt 会为校验自定义变量而立刻加载 browse-url.el
+;; （启动日志里的 "Loading browse-url..." 就来自这里），延迟到真正打开 URL 时再设。
 (when sys/wslp
-  (setopt browse-url-browser-function #'browse-url-generic
-          browse-url-generic-program "wslview"))
+  (with-eval-after-load 'browse-url
+    (setopt browse-url-browser-function #'browse-url-generic
+            browse-url-generic-program "wslview")))
 
 ;;@@ Windows 下把 shell 指向 Git Bash
 ;; 默认 cmdproxy.exe 跑不了 ob-shell 生成的 sh 脚本（org-babel 的 shell 块
@@ -293,8 +301,8 @@ remote 查找不缓存；buffer-local `exec-path'（envrc、python venv 等
 ;; `vc-refresh-state' 每次 find-file 都对 git 仓库里的文件同步跑一次
 ;; git status（Windows 上几十 ms）。移除后该开销转移到 diff-hl 的
 ;; idle 异步更新里，不再阻塞打开文件。
-;; 代价：doom-modeline 的 vcs segment 依赖它设置的 `vc-mode'，新打开的
-;; 文件在首次 auto-revert 触发前不显示分支；想恢复分支显示就注释掉这行。
+;; 代价：依赖 `vc-mode' 展示分支的插件不显示分支；本配置的 modeline
+;; 直接读取 .git/HEAD，不受影响。想恢复 vc 状态刷新就注释掉这行。
 (remove-hook 'find-file-hook #'vc-refresh-state)
 
 ;;@@ clash
@@ -453,7 +461,10 @@ If in WSL, try to get gateway via system commands."
 (require  'use-package)
 ;;@@DIMINISH 放在最前面
 ;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
-(use-package diminish :ensure t :pin "gnu")
+;; 不再 :pin "gnu"：:pin 在宏展开时会 require package（进而 require browse-url），
+;; 导致启动日志出现 "Loading browse-url..."；diminish 在 GNU ELPA，
+;; package-archive-priorities 已把 gnu 排最高，无需显式 pin
+(use-package diminish :ensure t)
 ;;@@DISPLAY-LINE-NUMBERS 显示行号
 (setopt line-number-display-limit
         (* 1024 1024))
@@ -926,10 +937,16 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 ;;@@ORG-APPT 日程到点提醒（打开 agenda 时自动同步有时段的事件）
 ;; appt 为内置包，同 recentf/winner 的处理方式：不进 package-selected-packages
 (use-package appt
+  ;; appt 会连带加载 diary-lib 等（约 10ms），启动后 1s 空闲再启用；
+  ;; 提醒晚 1 秒开始无影响
+  :defer 1
   :config
   (setq appt-message-warning-time 15    ; 提前 15 分钟开始提醒
         appt-display-interval 5)        ; 每 5 分钟重复一次直到手动清除
-  (appt-activate 1)
+  ;; appt-activate 会 message "Appointment reminders enabled…"（无 diary 文件
+  ;; 时还带后缀）；启动阶段不需要这条提示，静默掉
+  (let ((inhibit-message t))
+    (appt-activate 1))
   ;; agenda 视图生成完毕时，把范围内带时间的事件登记进 appt
   (add-hook 'org-agenda-finalize-hook #'org-agenda-to-appt))
 
@@ -1086,11 +1103,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
       (ibuffer-filter-disable)
       (ibuffer-filter-by-filename root))))
 ;;@@AUTO-REVERT-MODE 当文件在外部被修改时，自动更新对应的 buffer
-;; 轮询间隔翻倍。通知 + 轮询双保险：w32notify 的 watch 偶发「建立成功但收不到
-;; 事件」（Windows 已知问题），avoid-polling t 会把这类 buffer 排除出轮询，
-;; 从此永不 revert。nil 仅多一个 10s 轮询兜底，桌面机开销可忽略
+;; Windows 的 w32notify 偶发「建立成功但收不到事件」，必须保留 10s 轮询兜底；
+;; Linux/WSL 的 inotify 可靠，关掉轮询可避免每 10s 对所有文件 buffer 做一遍
+;; stat（没有通知支持的路径，如 /mnt/c，仍会自动回退到轮询）
 (setopt auto-revert-interval 10)
-(setopt auto-revert-avoid-polling nil)
+(setopt auto-revert-avoid-polling (not sys/win32p))
 (global-auto-revert-mode)
 ;;@@WINDMOVE 提供根据位置在 window 间移动 point 的方法
 (use-package windmove
@@ -1180,6 +1197,13 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; 固定 python 用 basedpyright（环境里同时装了 ruff，避免每次二选一）
   (add-to-list 'eglot-server-programs
                '((python-mode python-ts-mode) . ("basedpyright-langserver" "--stdio")))
+  ;; eldoc 只保留 hover：eglot 默认同时注册 signatureHelp 与 hover 两个来源，
+  ;; compose 策略下会显示两行（第一行 signature label 无 `func`，第二行
+  ;; hover 的完整签名有 `func`）。移除 signature 来源，只显示后者。
+  (add-hook 'eglot-managed-mode-hook
+            (lambda ()
+              (remove-hook 'eldoc-documentation-functions
+                           #'eglot-signature-eldoc-function t)))
   )
 ;;@@PYTHON Python 开发环境
 (use-package python
@@ -1223,16 +1247,20 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 
 ;;@@RUST Rust 开发环境
 (use-package rust-ts-mode
-  :custom
-  ;; 缩进与 rustfmt 默认值一致（4 空格）
-  (rust-ts-indent-offset 4)
-  :config
+  ;; :hook 本身不会延迟加载（展开里仍有 require），显式 :defer 才能避免
+  ;; 启动时加载 rust-ts-mode.el
+  :defer t
+  ;; 用 setq 而非 :custom：rust-ts-indent-offset 带 custom-autoload，
+  ;; :custom 会在启动时把 rust-ts-mode.el 加载进来
+  :init (setq rust-ts-indent-offset 4)
   ;; 填充列与 rustfmt 默认值一致
-  (add-hook 'rust-ts-mode-hook
-            (lambda () (setq-local fill-column 100))))
+  :hook (rust-ts-mode . (lambda () (setq-local fill-column 100))))
 
 ;;@@GO Go 开发环境
 (use-package go-ts-mode
+  ;; 同 rust：:hook 不延迟，显式 :defer 避免启动时加载 go-ts-mode.el；
+  ;; :config 里的 hook 会在首次打开 .go 时随 require 一起执行
+  :defer t
   :config
   ;; Go 强制使用 tab 缩进（gofmt 要求），覆盖全局的 indent-tabs-mode。
   ;; tab 显示宽 4 列、每级缩进 1 个 tab（= 4 列）。tab-width 必须等于
@@ -1395,10 +1423,13 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 ;; https://emacs.stackexchange.com/a/5650
 ;; Windows 的 ls-lisp 不支持 --group-directories-first（静默忽略），
 ;; 想目录前置需按平台分支；其余参数两边通用。
-(setopt dired-listing-switches
-        (if sys/win32p
-            "-laGh1v"
-          "-laGh1v --group-directories-first"))
+;; 延迟到 dired 首次使用时再设：setopt 会为检查自定义变量而提前加载
+;; dired.el（约 7ms），启动阶段用不到
+(with-eval-after-load 'dired
+  (setopt dired-listing-switches
+          (if sys/win32p
+              "-laGh1v"
+            "-laGh1v --group-directories-first")))
 ;; `!' 猜测命令时不再建议外部打开；dired 的 E（dired-do-open）改由
 ;; 下面的 clw/open-in-external-app 直接拉起系统默认程序，不经 shell，
 ;; 路径带空格/特殊字符也不会被拆词
@@ -1627,7 +1658,6 @@ Lisp function does not specify a special indentation."
           envrc ; 类似 buffer-env
           p-search ; 某种搜索工具
           doom-themes
-          doom-modeline
           rainbow-delimiters
           highlight-escape-sequences
           iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
@@ -1782,47 +1812,195 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   ;; Corrects (and improves) org-mode's native fontification.
   (doom-themes-org-config)
   )
-;;@@ doom-modeline
-(use-package doom-modeline
-  :defer t
-  :hook after-init
-  :config
-  ;; ---- 性能优化（视觉零变化）----
-  ;; 1) 图标 memoize：doom-modeline-icon 无缓存，每帧对 mode-line 里每个
-  ;;    图标重新查 nerd-icons 表 + propertize；右对齐机制还会把右段整体
-  ;;    多格式化一遍（图标算两遍）。图标是纯函数，按参数缓存后 O(1)。
-  (defvar clw/dm-icon-cache (make-hash-table :test 'equal :size 64))
-  (define-advice doom-modeline-icon
-      (:around (orig icon-set icon-name unicode text &rest args) clw/cache)
-    (let ((key (list (display-graphic-p) icon-set icon-name unicode text args)))
-      (or (gethash key clw/dm-icon-cache)
-          (puthash key (apply orig icon-set icon-name unicode text args)
-                   clw/dm-icon-cache))))
-  (defvar clw/dm-buf-icon-cache (make-hash-table :test 'equal :size 32))
-  (define-advice doom-modeline-icon-for-buffer
-      (:around (orig) clw/cache)
-    (let ((key (list (display-graphic-p) major-mode
-                     (and buffer-file-name
-                          (file-name-extension buffer-file-name)))))
-      (or (gethash key clw/dm-buf-icon-cache)
-          (puthash key (funcall orig) clw/dm-buf-icon-cache))))
-  ;; 2) 'main 布局剔除恒空段（未安装的包/未开的 mode），每帧省十余次
-  ;;    :eval 空调用；保留全部有内容或按需出现的段（region/isearch/
-  ;;    tramp/compile/eglot/flymake/jinx/pyim 等），显示效果不变。
-  (doom-modeline-def-modeline 'main
-    '(eldoc bar window-state matches buffer-info remote-host
-            buffer-position word-count selection-info)
-    '(compilation misc-info project-name debug lsp spell minor-modes
-                  input-method indent-info buffer-encoding major-mode
-                  process vcs check)))
+;;@@ NN-MODE-LINE 轻量自绘 mode-line
+;; 结构来自用户配置，另修正了几处问题：
+;; - 原 `(setq-default mode-line-format nil)` 会让 org/magit 等未挂 hook 的
+;;   buffer 完全没有 modeline；改为默认就用该格式，并在
+;;   `after-change-major-mode-hook` 里为每个 buffer 初始化缓存
+;; - 分支缓存原来永不失效；改为按 .git/HEAD 的 mtime 失效
+;; - 支持 worktree/submodule 的 .git 文件与 detached HEAD（显示短 hash）
+;; - eglot 的 `(alist-get major-mode eglot-server-programs)` 匹配不到以
+;;   mode 列表为 key 的条目；改为遍历匹配
+;; - Emacs 32 没有 `flymake-diagnostics-change-functions`；改为 advice
+;;   `flymake--handle-report`
+(use-package nn-mode-line
+  :no-require t
+  ;; 所有 buffer（含 org/magit）都安装；缓存随 major-mode 变化填充
+  :hook (after-change-major-mode . nn-mode-line-set)
+  :init
+  (defconst nn-mode-line--error
+    (propertize "\uEA87" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
+  (defconst nn-mode-line--warning
+    (propertize "\uEA6C" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
+  (defconst nn-mode-line--info
+    (propertize "\uEA74" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
+  (defconst nn-mode-line--git
+    (propertize "\uE0A0" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
+
+  (defface nn-mode-line-modified
+    '((t :inherit warning :weight bold))
+    "nn-mode-line 中已修改 buffer 的文件名。")
+
+  (defvar-local nn-mode-line--flymake-cache nil)
+  (defvar-local nn-mode-line--eglot-cache nil)
+  (defvar-local nn-mode-line--coding-cache nil)
+
+  (defvar nn-mode-line--vc-cache-table (make-hash-table :test #'equal)
+    "repo root -> (BRANCH-STRING . HEAD-MTIME)")
+
+  (defvar-local nn-mode-line--vc-root nil
+    "缓存 (PATH . ROOT)；ROOT 为 `none' 表示不在仓库中。")
+
+  (defun nn-mode-line--head-file (root)
+    "Return the HEAD file for ROOT, handling .git files (worktree/submodule)."
+    (let ((git (expand-file-name ".git" root)))
+      (cond
+       ((file-directory-p git)
+	(expand-file-name "HEAD" git))
+       ((file-readable-p git)          ; .git is a file: "gitdir: <path>"
+	(with-temp-buffer
+          (insert-file-contents git)
+          (goto-char (point-min))
+          (when (re-search-forward "^gitdir: \\(.+\\)$" nil t)
+            (expand-file-name "HEAD"
+                              (expand-file-name (match-string 1) root))))))))
+
+  (defun nn-mode-line--read-branch (head)
+    "Read branch name (or short hash when detached) from HEAD file."
+    (with-temp-buffer
+      (insert-file-contents head)
+      (goto-char (point-min))
+      (cond
+       ((re-search-forward "refs/heads/\\(.+\\)$" nil t)
+	(match-string 1))
+       ((looking-at "\\([0-9a-f]\\{7,40\\}\\)")
+	(substring (match-string 1) 0 7))
+       (t "?"))))
+
+  (defun nn-mode-line--vc-root ()
+    "Return the git root for the current buffer, or nil.
+Cached per buffer and invalidated when PATH (buffer file/dir) changes."
+    (let ((path (or buffer-file-name default-directory)))
+      (when (and path (not (file-remote-p path)))
+	(unless (and nn-mode-line--vc-root
+                     (equal (car nn-mode-line--vc-root) path))
+          (setq nn-mode-line--vc-root
+		(cons path (or (locate-dominating-file path ".git") 'none))))
+	(let ((root (cdr nn-mode-line--vc-root)))
+          (unless (eq root 'none) root)))))
+
+  (defun nn-mode-line--vc--refresh ()
+    "Return \"<branch-icon> branch\" for the current buffer, or nil.
+Cached per repository root and invalidated when .git/HEAD changes."
+    (ignore-errors
+      (when-let* ((root (nn-mode-line--vc-root))
+                  (head (nn-mode-line--head-file root))
+                  (attrs (file-attributes head))
+                  (mtime (file-attribute-modification-time attrs)))
+	(let ((cached (gethash root nn-mode-line--vc-cache-table)))
+          (if (and cached (equal (cdr cached) mtime))
+              (car cached)
+            (let ((branch (concat nn-mode-line--git
+                                  (nn-mode-line--read-branch head))))
+              (puthash root (cons branch mtime) nn-mode-line--vc-cache-table)
+              branch))))))
+
+  (defun nn-mode-line--coding-refresh (&rest _)
+    "Refresh coding-system segment for the current buffer."
+    (setq nn-mode-line--coding-cache
+          (when buffer-file-coding-system
+            (concat
+             (symbol-name buffer-file-coding-system) " "
+             (pcase (coding-system-eol-type buffer-file-coding-system)
+               (0 "LF") (1 "CRLF") (2 "CR") (_ "?"))))))
+
+  (dolist (cmd '(set-buffer-file-coding-system
+		 revert-buffer-with-coding-system))
+    (advice-add cmd :after #'nn-mode-line--coding-refresh))
+
+  (with-eval-after-load 'flymake
+    (defun nn-mode-line--flymake-refresh (&rest _)
+      "Refresh flymake diagnostics counters."
+      (setq nn-mode-line--flymake-cache
+            (when (bound-and-true-p flymake-mode)
+              (let ((diags (flymake-diagnostics)))
+		(format "%s %d %s %d %s %d"
+			nn-mode-line--error
+			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :error)) diags)
+			nn-mode-line--warning
+			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :warning)) diags)
+			nn-mode-line--info
+			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :note)) diags)))))
+      (force-mode-line-update))
+    (advice-add 'flymake--handle-report :after #'nn-mode-line--flymake-refresh)
+    (add-hook 'flymake-mode-hook #'nn-mode-line--flymake-refresh))
+
+  (with-eval-after-load 'eglot
+    (defun nn-mode-line--eglot-refresh (&rest _)
+      "Refresh the Eglot server name segment."
+      (setq nn-mode-line--eglot-cache
+            (when (and (fboundp 'eglot-managed-p) (eglot-managed-p))
+              (let* ((cell (seq-find
+                            (lambda (c)
+                              (let ((k (car c)))
+				(if (listp k) (memq major-mode k)
+                                  (eq major-mode k))))
+                            eglot-server-programs))
+                     (prog (cdr cell)))
+		(cond ((stringp prog) prog)
+                      ((and (consp prog) (stringp (car prog))) (car prog))
+                      (t "lsp")))))
+      (force-mode-line-update))
+    (add-hook 'eglot-managed-mode-hook #'nn-mode-line--eglot-refresh))
+
+  (defun nn-mode-line--buffer-name ()
+    "Return the buffer name, highlighted when the buffer is modified."
+    (if (buffer-modified-p)
+        (propertize (buffer-name) 'face 'nn-mode-line-modified)
+      (buffer-name)))
+
+  (defconst nn-mode-line-format
+    '("%e"
+      ;; 分支用 :eval 实时取（内部按 .git/HEAD mtime 缓存，切分支后自动更新）
+      "  " (:eval (nn-mode-line--vc--refresh))
+      "  " (:eval (nn-mode-line--buffer-name))
+      "  " nn-mode-line--flymake-cache
+      "  " nn-mode-line--eglot-cache
+      "  " mode-line-misc-info
+      mode-line-format-right-align
+      "  " "L%l C%c"
+      "  " nn-mode-line--coding-cache
+      "  " mode-name
+      "  "))
+
+  (defun nn-mode-line-set ()
+    "Install `nn-mode-line-format' and its caches in the current buffer."
+    (nn-mode-line--coding-refresh)
+    (when (fboundp 'nn-mode-line--flymake-refresh)
+      (nn-mode-line--flymake-refresh))
+    (when (fboundp 'nn-mode-line--eglot-refresh)
+      (nn-mode-line--eglot-refresh))
+    (setq-local mode-line-format nn-mode-line-format))
+
+  ;; 所有 buffer 都使用该格式；缓存由 major-mode 变化时填充
+  (setq-default mode-line-format nn-mode-line-format)
+  )
+
 ;;@@ MARKDOWN-MODE
 ;; .md/.markdown/.mkd/.mdown/.mkdn/.mdwn 由包自带 autoload 覆盖，这里只补 .mdx
 (use-package markdown-mode
   :mode "\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\|mdx\\)\\'")
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
+(defun clw/other-window ()
+  "两个窗口时直接 `other-window'，多于两个才用 ace-window 选择。
+这样常见双窗口布局下 C-x o 不再弹标号/动作菜单，也无需加载 ace-window。"
+  (interactive)
+  (if (= 2 (length (window-list nil 'nomini)))
+      (other-window 1)
+    (ace-window)))
 (use-package ace-window
   :bind (("M-o" . ace-window)
-         ("C-x o" . ace-window)
+         ("C-x o" . clw/other-window)
          ;; 选窗口后显示"下一个命令"的 buffer（配合任意 buffer 命令）
          ("C-x 4 o" . clw/ace-window-prefix)
          ;; 选窗口后在该窗口内执行任意命令
@@ -1855,6 +2033,32 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                         (format "在 %s 中执行…" (buffer-name (window-buffer win))))))
                  (this-command cmd))
             (call-interactively cmd)))))))
+
+;;@@SPEEDBAR 侧边栏文件/标签浏览（内置，免 :ensure）
+(use-package speedbar
+  ;; C-| 是独立键事件（与 C-\ 不同）；TUI 下终端可能把 Ctrl+Shift+\ 发成
+  ;; C-\（已绑定 toggle-input-method），此时用 M-x speedbar-window
+  :bind ("C-|" . speedbar-window)
+  :custom
+  (speedbar-window-side 'right)
+  (speedbar-window-default-width 30)
+  (speedbar-vc-do-check nil)
+  (speedbar-obj-do-check nil)
+  (speedbar-use-images nil)
+  (speedbar-use-imenu-flag nil)
+  (speedbar-use-tool-tips-flag nil)
+  (speedbar-hide-button-brackets-flag t)
+  (speedbar-mode-functions-list nil)
+  (speedbar-mode-specific-contents-flag nil)
+  (speedbar-dynamic-tags-function-list nil)
+  (speedbar-special-mode-expansion-list nil)
+  (speedbar-show-unknown-files t)
+  (speedbar-smart-directory-expand-flag nil)
+  (speedbar-verbosity-level 0)
+  (speedbar-directory-unshown-regexp "^\\(\\.\\.*$\\)")
+  :config
+  ;; 放在 :config 而不是 :bind 的 :map 里：speedbar-mode-map 要等库加载后存在
+  (keymap-set speedbar-mode-map "q" #'delete-window))
 
 ;;@@PULSE 跳转后脉冲高亮当前行（内置 pulse，替代 pulsar）
 (use-package pulse
@@ -2008,7 +2212,20 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (add-hook 'eshell-mode-hook
             (lambda ()
               (setq-local corfu-auto nil)
-              (corfu-mode))))
+              (corfu-mode)))
+  :config
+  ;; 把 buffer 内的补全候选转交 minibuffer（consult/vertico/orderless）。
+  ;; 不绑定按键，按 M-x clw/corfu-move-to-minibuffer 调用。
+  ;; 注意 completion-in-region--data 是内部变量，Emacs 升级可能改名。
+  (defun clw/corfu-move-to-minibuffer ()
+    "把当前 buffer 内补全交给 `consult-completion-in-region'。"
+    (interactive)
+    (pcase completion-in-region--data
+      (`(,beg ,end ,table ,pred ,extras)
+       (let ((completion-extra-properties extras)
+             completion-cycle-threshold completion-cycling)
+         (consult-completion-in-region beg end table pred)))))
+  (add-to-list 'corfu-continue-commands #'clw/corfu-move-to-minibuffer))
 ;;@@ cape
 (use-package cape
   :after corfu
@@ -2104,6 +2321,17 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
       (avy-resume))
     (select-window
      (cdr (ring-ref avy-ring 0)))
+    t)
+
+  ;; dispatch 里 C-y 绑定的动作；avy 自身只提供 avy-action-yank（按 sexp），
+  ;; 不提供按行的版本，缺了会在按 C-y 时报 void-function
+  (defun avy-action-yank-line (pt)
+    "复制 PT 所在行（含换行）并 yank 到当前 point。"
+    (save-excursion
+      (goto-char pt)
+      (kill-ring-save (line-beginning-position)
+                      (min (point-max) (1+ (line-end-position)))))
+    (yank)
     t)
 
   (defun avy-action-copy-whole-line (pt)
@@ -2551,7 +2779,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;; 注意：envrc-global-mode 是全局 mode，必须一次性启用（放 after-init）。
 ;; 不能挂到 find-file-hook——无参调用会 toggle，反复开关且每次遍历 buffer 列表。
 (use-package envrc
-  :when sys/linuxp
+  ;; direnv 是 envrc 的运行前提。未安装时启用它只会给每个 buffer 增加一次
+  ;; 向上查找 .envrc 的开销（启动时还要花 ~14ms 加载），故直接跳过；
+  ;; 装好 direnv 后重启 Emacs 即生效
+  :when (and sys/linuxp (executable-find "direnv"))
   :defer t
   :hook (after-init . envrc-global-mode))
 ;;@@TEMPEL 好用的代码模板工具
@@ -2700,6 +2931,30 @@ This differs from Avy's goto-char-timer in how it processes parens."
      ("U" "unmerged" . (:inherit font-lock-keyword-face))))
   :config
   (magit-fast-mode 1)
+  ;; 原解析按换行切分且未处理 git 的路径引号：非 ASCII 文件名（中文等）
+  ;; 会被 git 转义成 "\346\226\207..." 这样的字符串，导致状态栏乱码、
+  ;; TAB 展开 hunk / RET 跳转全部失效。改用 -z（NUL 分隔、不转义）重写。
+  (define-advice magit-fast--porcelain-parse
+      (:override () clw/magit-fast-porcelain-parse)
+    (let (untracked staged unstaged)
+      (dolist (entry (split-string
+                      (magit-git-output "status" "--porcelain" "--no-renames" "-z")
+                      (string ?\0) t))
+        (when (> (length entry) 3)
+          (let* ((x    (aref entry 0))
+                 (y    (aref entry 1))
+                 (file (substring entry 3))
+                 (xc   (char-to-string x))
+                 (yc   (char-to-string y)))
+            (if (and (eq x ??) (eq y ??))
+                (push (cons "??" file) untracked)
+              (unless (memq x '(?\s ??))
+                (push (cons xc file) staged))
+              (unless (eq y ?\s)
+                (push (cons yc file) unstaged))))))
+      `(:untracked ,(nreverse untracked)
+        :staged    ,(nreverse staged)
+        :unstaged  ,(nreverse unstaged))))
   ;; magit-status-mode-map 由 magit-status.el 在首次打开 status 时创建，
   ;; 直接 :bind 会绑到尚不存在的 map（或绑完又被新建的 map 覆盖），
   ;; 故等 magit-status 加载后再绑定。用 "RET"(13) 而非 "<return>"：
@@ -2756,9 +3011,27 @@ This differs from Avy's goto-char-timer in how it processes parens."
 
   ;; 文件行插入器：彩色标题行 + 懒加载内容区。覆盖 magit-fast--insert 的
   ;; 原实现（整行当 section 正文，TAB 只能折叠行本身、无 hunk 可展）
+  (defun clw/magit-fast--expand-untracked (entries)
+    "把未跟踪目录条目（\"dir/\"）展开为目录内的文件条目。
+git status 默认把整体未跟踪的目录折叠成一条 \"dir/\"，而
+`git diff --no-index /dev/null dir/' 会报 \"Could not access\"，
+导致 TAB 展不开。用 ls-files 列出其中的文件（保持原有的 ?? 代码）。"
+    (let (out)
+      (dolist (entry entries)
+        (if (and (equal (car entry) "??")
+                 (string-suffix-p "/" (cdr entry)))
+            (dolist (f (split-string
+                        (magit-git-output "ls-files" "--others"
+                                          "--exclude-standard" "-z" "--"
+                                          (cdr entry))
+                        (string ?\0) t))
+              (push (cons "??" f) out))
+          (push entry out)))
+      (nreverse out)))
+
   (define-advice magit-fast--insert
       (:override (entries) clw/magit-fast-insert)
-    (dolist (entry entries)
+    (dolist (entry (clw/magit-fast--expand-untracked entries))
       (let* ((code (car entry))
              (file (cdr entry))
              (info (assoc code magit-fast-status-alist)))
@@ -2784,7 +3057,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (defun clw/magit-fast-diff ()
     "显示点下内容的 diff 详情，或在 hunk 上跳转到源文件。
 hunk 内任意行 → 跳到源文件对应行（不弹 diff 窗口；staged/unstaged/
-untracked 一律打开 worktree 里的真实文件，而不是只读的 index blob）；
+untracked 在 worktree 存在时打开真实文件，否则回退到 blob 版本）；
 文件行（unstaged/staged/unmerged）→ 该文件 diff；Recent commits 的
 commit 行 → 该 commit diff；其余（untracked 文件等）回落
 `magit-visit-thing'。文件行的 TAB 可懒加载内联 hunks。"
@@ -2793,9 +3066,13 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
           (section (magit-current-section)))
       (cond
        ;; hunk（含其内部各行）：跳到文件对应位置，不再用 magit-diff-dwim
-       ;; 重开一个只显示该文件全部 diff 的窗口
+       ;; 重开一个只显示该文件全部 diff 的窗口。仅当 worktree 中确实存在该
+       ;; 文件时才走 worktree 版本，否则（如已删除）会打开一个空 buffer，
+       ;; 此时回退到 blob 版本以看到删除前的内容。
        ((and section (eq (oref section type) 'hunk))
-        (if (memq (clw/magit-fast--hunk-region) '(staged unstaged untracked))
+        (if (and file
+                 (memq (clw/magit-fast--hunk-region) '(staged unstaged untracked))
+                 (file-exists-p (expand-file-name file (magit-toplevel))))
             (magit-diff-visit-worktree-file)
           (magit-diff-visit-file)))
        ((and file
@@ -2816,13 +3093,7 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
                #'magit-visit-thing)))))))
 ;;@@ mixed pitch 字体混合显示插件
 (use-package mixed-pitch
-  :defer t
-  :init
-  ;; Fix the `nerd-icons-corfu' display issue
-  (with-eval-after-load 'corfu
-    (define-advice corfu--make-buffer (:around (oldfun &rest args))
-      (let ((face-remapping-alist nil))
-        (apply oldfun args)))))
+  :defer t)
 ;;@@ verb
 (use-package verb
   :after org
@@ -2858,7 +3129,7 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
 (use-package hideshow
   ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
   :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
-          python-ts-mode) . hs-minor-mode)
+                     python-ts-mode) . hs-minor-mode)
   :bind (("C-<tab>" . hs-cycle)
          ("C-S-<tab>" . hs-global-cycle))
   ;; :config 里定义的命令必须列在 :commands 生成 autoload 桩，
@@ -2951,6 +3222,14 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   :config
   ;; auto-save project state after 5 seconds of idle time
   (setq project-x-auto-save-delay 5) ; nil to disable autosave
+  ;; 自动保存会 message "Saved layout ..." 和 "Wrote project window state..."，
+  ;; 每 5 秒刷一次 echo area，遮挡 eldoc（如 Go 的函数签名）；自动保存期间静默
+  (defun clw/project-x-silent-auto-save (fn &rest args)
+    "在 `inhibit-message' 生效期间执行 FN，静默自动保存的状态提示。"
+    (let ((inhibit-message t))
+      (apply fn args)))
+  (advice-add 'project-x--auto-save-current :around
+              #'clw/project-x-silent-auto-save)
   ;; use the custom prompter that shows session labels with "choose a dir" fallback
   (defun clw/project-prompt ()
     "Prompt for a project with session labels and 'choose a dir' fallback.
