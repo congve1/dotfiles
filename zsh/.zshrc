@@ -37,14 +37,19 @@ setopt no_flow_control
 
 # OMZ 公共库（去掉 completion.zsh —— compinit 统一由下方 zsh-syntax-highlighting 入口执行）
 zinit lucid for OMZ::lib/key-bindings.zsh
+# 注意：不要加载 theme-and-appearance.zsh —— 它会在延迟加载时把 ls 别名改回
+# `ls --color=tty`（覆盖下面的 eza）；其 prompt_subst 由 p10k 设置，
+# LS_COLORS 已由本文件下方的 dircolors 块生成。
 zinit wait lucid for \
     OMZ::lib/git.zsh \
     OMZ::lib/clipboard.zsh \
     OMZ::lib/correction.zsh \
-    OMZ::lib/history.zsh \
-    OMZ::lib/theme-and-appearance.zsh \
     OMZ::plugins/git/git.plugin.zsh \
     OMZ::plugins/git-extras/git-extras.plugin.zsh
+
+# history 库会 setopt share_history（跨会话共享历史），与本文件显式配置的
+# INC_APPEND_HISTORY 语义冲突；加载后立即关掉，保留 omz_history 命令
+zinit wait lucid atload'unsetopt share_history' for OMZ::lib/history.zsh
 
 # 补全源：只注册，不跑 compinit（全 shell 唯一的 compinit 在 zsh-syntax-highlighting 的 atinit 里）
 zinit wait lucid blockf for zsh-users/zsh-completions
