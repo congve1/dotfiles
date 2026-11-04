@@ -1828,18 +1828,40 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   ;; 所有 buffer（含 org/magit）都安装；缓存随 major-mode 变化填充
   :hook (after-change-major-mode . nn-mode-line-set)
   :init
-  (defconst nn-mode-line--error
-    (propertize "\uEA87" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
-  (defconst nn-mode-line--warning
-    (propertize "\uEA6C" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
-  (defconst nn-mode-line--info
-    (propertize "\uEA74" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
-  (defconst nn-mode-line--git
-    (propertize "\uE0A0" 'face '(:family "Symbols Nerd Font Mono" :height 1.0)))
+  ;; 图标：Nerd Font 字形 + 语义色。face 属性传列表时按顺序叠加，
+  ;; 后一项只覆盖 :family/:height，不会丢掉前面的颜色。
+  (defun nn-mode-line--icon (glyph face)
+    "GLYPH rendered in Nerd Font, colored with FACE."
+    (propertize glyph 'face (list face '(:family "Symbols Nerd Font Mono" :height 1.0))))
 
+  (defconst nn-mode-line--error   (nn-mode-line--icon "\uEA87" 'nn-mode-line-error))
+  (defconst nn-mode-line--warning (nn-mode-line--icon "\uEA6C" 'nn-mode-line-warning))
+  (defconst nn-mode-line--info    (nn-mode-line--icon "\uEA74" 'nn-mode-line-info))
+  (defconst nn-mode-line--git     (nn-mode-line--icon "\uE0A0" 'nn-mode-line-vcs))
+
+  ;; 分段 face：颜色与粗细逐项对齐 doom-modeline，背景统一由下文的
+  ;; `clw/mode-line-blend' 设置，所以这里只继承主题的这几个子 face。
+  (defface nn-mode-line-buffer-file
+    '((t :inherit (mode-line-buffer-id bold)))
+    "未修改 buffer 的文件名（对应 `doom-modeline-buffer-file'）。")
   (defface nn-mode-line-modified
-    '((t :inherit warning :weight bold))
-    "nn-mode-line 中已修改 buffer 的文件名。")
+    '((t :inherit (warning bold) :background unspecified))
+    "已修改 buffer 的文件名（对应 `doom-modeline-buffer-modified'）。")
+  (defface nn-mode-line-emphasis
+    '((t :inherit (mode-line-emphasis bold)))
+    "major-mode 等强调段（对应 `doom-modeline-buffer-major-mode'）。")
+  (defface nn-mode-line-vcs
+    '((t :inherit (success bold)))
+    "分支名（对应 `doom-modeline-vcs-default'，继承 `doom-modeline-info'）。")
+  (defface nn-mode-line-error
+    '((t :inherit (error bold)))
+    "错误计数（对应 `doom-modeline-error'）。")
+  (defface nn-mode-line-warning
+    '((t :inherit (warning bold)))
+    "警告计数（对应 `doom-modeline-warning'）。")
+  (defface nn-mode-line-info
+    '((t :inherit (success bold)))
+    "提示计数（对应 `doom-modeline-info'）。")
 
   (defvar-local nn-mode-line--flymake-cache nil)
   (defvar-local nn-mode-line--eglot-cache nil)
@@ -1901,7 +1923,8 @@ Cached per repository root and invalidated when .git/HEAD changes."
           (if (and cached (equal (cdr cached) mtime))
               (car cached)
             (let ((branch (concat nn-mode-line--git
-                                  (nn-mode-line--read-branch head))))
+                                  (propertize (nn-mode-line--read-branch head)
+                                              'face 'nn-mode-line-vcs))))
               (puthash root (cons branch mtime) nn-mode-line--vc-cache-table)
               branch))))))
 
@@ -1923,14 +1946,19 @@ Cached per repository root and invalidated when .git/HEAD changes."
       "Refresh flymake diagnostics counters."
       (setq nn-mode-line--flymake-cache
             (when (bound-and-true-p flymake-mode)
-              (let ((diags (flymake-diagnostics)))
-		(format "%s %d %s %d %s %d"
-			nn-mode-line--error
-			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :error)) diags)
-			nn-mode-line--warning
-			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :warning)) diags)
-			nn-mode-line--info
-			(seq-count (lambda (d) (eq (flymake-diagnostic-type d) :note)) diags)))))
+              (let* ((diags (flymake-diagnostics))
+                     (n (lambda (type)
+                          (number-to-string
+                           (seq-count (lambda (d) (eq (flymake-diagnostic-type d) type))
+                                      diags))))
+                     (seg (lambda (icon face type)
+                            (concat icon " "
+                                    (propertize (funcall n type) 'face face)))))
+                (mapconcat #'identity
+                           (list (funcall seg nn-mode-line--error 'nn-mode-line-error :error)
+                                 (funcall seg nn-mode-line--warning 'nn-mode-line-warning :warning)
+                                 (funcall seg nn-mode-line--info 'nn-mode-line-info :note))
+                           " "))))
       (force-mode-line-update))
     (advice-add 'flymake--handle-report :after #'nn-mode-line--flymake-refresh)
     (add-hook 'flymake-mode-hook #'nn-mode-line--flymake-refresh))
@@ -1954,10 +1982,11 @@ Cached per repository root and invalidated when .git/HEAD changes."
     (add-hook 'eglot-managed-mode-hook #'nn-mode-line--eglot-refresh))
 
   (defun nn-mode-line--buffer-name ()
-    "Return the buffer name, highlighted when the buffer is modified."
-    (if (buffer-modified-p)
-        (propertize (buffer-name) 'face 'nn-mode-line-modified)
-      (buffer-name)))
+    "Return the buffer name, bold; highlighted when the buffer is modified."
+    (propertize (buffer-name) 'face
+                (if (buffer-modified-p)
+                    'nn-mode-line-modified
+                  'nn-mode-line-buffer-file)))
 
   (defconst nn-mode-line-format
     '("%e"
@@ -1970,7 +1999,8 @@ Cached per repository root and invalidated when .git/HEAD changes."
       mode-line-format-right-align
       "  " "L%l C%c"
       "  " nn-mode-line--coding-cache
-      "  " mode-name
+      "  " (:eval (propertize (format-mode-line mode-name)
+                              'face 'nn-mode-line-emphasis))
       "  "))
 
   (defun nn-mode-line-set ()
@@ -1987,6 +2017,67 @@ Magit 的 buffer 已有自己的 header/上下文，不再额外占一行 mode l
 
   ;; 所有 buffer 都使用该格式；缓存由 major-mode 变化时填充
   (setq-default mode-line-format nn-mode-line-format)
+
+  ;; mode line 沿用主题给的略深底色（同 doom-modeline），不加任何边线
+  (defun clw/face-color (face attribute &optional fallback)
+    "Return FACE's ATTRIBUTE when it is a color string, else FALLBACK."
+    (let ((value (face-attribute face attribute nil t)))
+      (if (stringp value) value fallback)))
+
+  ;; 主题给 mode-line 设计的底色/文字色（切换主题时会重新捕获）：
+  ;; (ML-BG ML-BG-INACTIVE ML-FG ML-FG-INACTIVE)
+  (defvar clw/mode-line--theme-colors nil)
+
+  (defun clw/mode-line-capture-theme-colors ()
+    "Capture the theme's original mode-line colors before blending."
+    (setq clw/mode-line--theme-colors
+          (list (face-attribute 'mode-line :background nil t)
+                (face-attribute 'mode-line-inactive :background nil t)
+                (face-attribute 'mode-line :foreground nil t)
+                (face-attribute 'mode-line-inactive :foreground nil t))))
+
+  (defun clw/mode-line-blend ()
+    "按 doom-modeline 的方式设置 mode line。
+背景取主题 `mode-line' face 的底色（doom 主题里是略深的暖色），不加边线；
+TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
+    (unless clw/mode-line--theme-colors
+      (clw/mode-line-capture-theme-colors))
+    (let* ((default-bg (face-attribute 'default :background nil t))
+           (fg (face-attribute 'default :foreground nil t))
+           (default-bg (unless (eq default-bg 'unspecified-bg) default-bg))
+           (fg (unless (eq fg 'unspecified-fg) fg))
+           (ml-bg   (nth 0 clw/mode-line--theme-colors))
+           (ml-bg-i (nth 1 clw/mode-line--theme-colors))
+           (ml-fg   (nth 2 clw/mode-line--theme-colors))
+           (ml-fg-i (nth 3 clw/mode-line--theme-colors))
+           ;; 参考 doom-modeline：背景直接取主题 mode-line face 的底色
+           ;; （doom 主题里是 bg 略深 5% 的暖色），不再与正文背景强行融合
+           (bg-a (or (and (stringp ml-bg) ml-bg) default-bg))
+           (bg-i (or (and (stringp ml-bg-i) ml-bg-i) bg-a))
+           (fg-a   (if (stringp ml-fg) ml-fg fg))
+           (fg-i   (if (stringp ml-fg-i) ml-fg-i
+                     (or (clw/face-color 'shadow :foreground) fg))))
+      (dolist (face '(mode-line mode-line-active))
+        (when (facep face)
+          (set-face-attribute face nil
+                              :background bg-a :foreground fg-a
+                              :inverse-video nil
+                              :box nil :underline nil :overline nil)))
+      (when (facep 'mode-line-inactive)
+        (set-face-attribute 'mode-line-inactive nil
+                            :background bg-i :foreground fg-i
+                            :inverse-video nil
+                            :box nil :underline nil :overline nil))))
+
+  (defun clw/mode-line-blend-after-theme (&rest _)
+    "Recapture theme colors and reapply blending after a theme switch."
+    (setq clw/mode-line--theme-colors nil)
+    (clw/mode-line-capture-theme-colors)
+    (clw/mode-line-blend))
+
+  (clw/mode-line-capture-theme-colors)
+  (clw/mode-line-blend)
+  (advice-add 'load-theme :after #'clw/mode-line-blend-after-theme)
   )
 
 ;;@@ MARKDOWN-MODE
