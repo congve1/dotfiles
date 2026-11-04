@@ -2774,18 +2774,33 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ;; RET 看 diff 详情（fast 版 status 里 magit-visit-thing 是占位符，直接调用报错）：
   ;; 文件行 → 该文件 diff；Recent commits 行（无 commit section，行首 %h hash）
   ;; → commit diff；其余（untracked、标题…）走 RET 键映射的重定向目标，保持原版语义
+  (defun clw/magit-fast--hunk-region ()
+    "返回当前 hunk 所属区域类型（staged/unstaged/untracked/…）。"
+    (let* ((sec (magit-current-section))
+           (file-sec (and sec (eq (oref sec type) 'hunk) (oref sec parent)))
+           (region-sec (and file-sec (oref file-sec parent))))
+      (and region-sec (oref region-sec type))))
+
   (defun clw/magit-fast-diff ()
-    "显示点下内容的 diff 详情。
+    "显示点下内容的 diff 详情，或在 hunk 上跳转到源文件。
+hunk 内任意行 → 跳到源文件对应行（不弹 diff 窗口；staged/unstaged/
+untracked 一律打开 worktree 里的真实文件，而不是只读的 index blob）；
 文件行（unstaged/staged/unmerged）→ 该文件 diff；Recent commits 的
 commit 行 → 该 commit diff；其余（untracked 文件等）回落
-`magit-visit-thing'。文件行的 TAB 可懒加载内联 hunks，本命令在独立
-buffer 看 diff。"
+`magit-visit-thing'。文件行的 TAB 可懒加载内联 hunks。"
     (interactive)
-    (let ((file (magit-file-at-point)))
+    (let ((file (magit-file-at-point))
+          (section (magit-current-section)))
       (cond
+       ;; hunk（含其内部各行）：跳到文件对应位置，不再用 magit-diff-dwim
+       ;; 重开一个只显示该文件全部 diff 的窗口
+       ((and section (eq (oref section type) 'hunk))
+        (if (memq (clw/magit-fast--hunk-region) '(staged unstaged untracked))
+            (magit-diff-visit-worktree-file)
+          (magit-diff-visit-file)))
        ((and file
              (magit-section-match '([* unstaged] [* staged] [* unmerged])
-                                  (magit-current-section)))
+                                  section))
         (magit-diff-dwim nil `(,file)))
        ;; magit-fast 的 Recent commits 行没有 commit section，
        ;; 行首是 %h 缩写 hash，直接取来打开 commit diff
