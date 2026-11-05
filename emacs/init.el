@@ -30,6 +30,21 @@
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme theme t)
   )
+;; 私有符号契约检查：配置里有几处 :override / :around 直接改写第三方包的
+;; 私有函数，上游改名或改参数后会「静默」失效（旧 advice 匹配不到、或参数
+;; 数量不对）。在挂 advice 之前核对函数存在性与参数个数，变了就显式告警，
+;; 而不是等某天 magit / p-search 莫名坏掉才发现。
+(defun clw/check-private-advice (fn arity label)
+  "检查 FN 是否存在且参数个数为 ARITY，不符时警告 LABEL 对应的 advice。
+ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
+  (unless (and (fboundp fn)
+               (equal (condition-case nil (func-arity fn) (error nil)) arity))
+    (display-warning
+     'clw
+     (format "%s：%S 签名变化（期望 %S，实际 %S），对应 advice 需复查"
+             label fn arity
+             (condition-case nil (func-arity fn) (error 'void-function)))
+     :warning)))
 ;;@ 基础配置
 ;;@@ custom配置
 (setq custom-file (expand-file-name "custom.el" user-emacs-directory))
@@ -1465,7 +1480,8 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (completion-ignore-case t)
   (enable-recursive-minibuffers t)
   (inhibit-message-regexps (append inhibit-message-regexps
-                                   '("^Saving file" "^Wrote" "^Indentation setup for shell")))
+                                   '("^Saving file" "^Wrote" "^Saved layout "
+                                     "^Indentation setup for shell")))
   :init (minibuffer-depth-indicate-mode)
   :config
   ;; minibuffer 输入时抑制 `message' 回显，避免后台消息打断/覆盖正在输入的内容
@@ -3041,6 +3057,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
      ("U" "unmerged" . (:inherit font-lock-keyword-face))))
   :config
   (magit-fast-mode 1)
+  (clw/check-private-advice 'magit-fast--porcelain-parse '(0 . 0)
+                            "magit-fast--porcelain-parse :override")
+  (clw/check-private-advice 'magit-fast--insert '(1 . 1)
+                            "magit-fast--insert :override")
   ;; 原解析按换行切分且未处理 git 的路径引号：非 ASCII 文件名（中文等）
   ;; 会被 git 转义成 "\346\226\207..." 这样的字符串，导致状态栏乱码、
   ;; TAB 展开 hunk / RET 跳转全部失效。改用 -z（NUL 分隔、不转义）重写。
@@ -3332,14 +3352,14 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   :config
   ;; auto-save project state after 5 seconds of idle time
   (setq project-x-auto-save-delay 5) ; nil to disable autosave
-  ;; 自动保存会 message "Saved layout ..." 和 "Wrote project window state..."，
-  ;; 每 5 秒刷一次 echo area，遮挡 eldoc（如 Go 的函数签名）；自动保存期间静默
-  (defun clw/project-x-silent-auto-save (fn &rest args)
-    "在 `inhibit-message' 生效期间执行 FN，静默自动保存的状态提示。"
-    (let ((inhibit-message t))
-      (apply fn args)))
-  (advice-add 'project-x--auto-save-current :around
-              #'clw/project-x-silent-auto-save)
+  ;; project-x 的自动保存由 window-configuration-change-hook / kill-buffer-hook
+  ;; 触发，经 project-x--auto-save-current 做 debounce：空闲满 5 秒才写一次
+  ;; （不是固定间隔轮询）。每次写出会 message "Wrote project window state ..."
+  ;; 和 "Saved layout ..."，刷 echo area 时会遮挡 eldoc（如 Go 的函数签名）。
+  ;; 交给上面的 inhibit-message-regexps 统一抑制（^Saved layout / ^Wrote），
+  ;; 不再对私有符号 project-x--auto-save-current 加 advice。
+  ;; 注意：正则方案只跳过显示，消息仍记入 *Messages*（受 message-log-max
+  ;; 默认 1000 条自动截断），与原 advice 的「完全不记录」有细微差别。
   ;; use the custom prompter that shows session labels with "choose a dir" fallback
   (defun clw/project-prompt ()
     "Prompt for a project with session labels and 'choose a dir' fallback.
@@ -3382,6 +3402,8 @@ Combines project-x's session label display with the built-in
           `(,grep-program "-r" "-c" ,@(and case-insensitive-p '("--ignore-case"))
                           ,term-str ".")
         (funcall fun term cmd))))
+  (clw/check-private-advice 'p-search-query--command '(2 . 2)
+                            "p-search-query--command :around")
   (advice-add 'p-search-query--command
               :around #'clw/p-search-query--command))
 ;;@4 一些零散的小函数和设定
