@@ -934,22 +934,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
             (tags "CLOSED>=\"<today>\""
                   ((org-agenda-overriding-header "今日完成"))))))))
 
-;;@@ORG-APPT 日程到点提醒（打开 agenda 时自动同步有时段的事件）
-;; appt 为内置包，同 recentf/winner 的处理方式：不进 package-selected-packages
-(use-package appt
-  ;; appt 会连带加载 diary-lib 等（约 10ms），启动后 1s 空闲再启用；
-  ;; 提醒晚 1 秒开始无影响
-  :defer 1
-  :config
-  (setq appt-message-warning-time 15    ; 提前 15 分钟开始提醒
-        appt-display-interval 5)        ; 每 5 分钟重复一次直到手动清除
-  ;; appt-activate 会 message "Appointment reminders enabled…"（无 diary 文件
-  ;; 时还带后缀）；启动阶段不需要这条提示，静默掉
-  (let ((inhibit-message t))
-    (appt-activate 1))
-  ;; agenda 视图生成完毕时，把范围内带时间的事件登记进 appt
-  (add-hook 'org-agenda-finalize-hook #'org-agenda-to-appt))
-
 ;;@@ORG-PREWARM 启动后空闲时预热 org 全家桶（首次 C-c a a 的 ~10s require 链挪到这里）
 (add-hook 'emacs-startup-hook
           (lambda ()
@@ -1804,6 +1788,9 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
             (when (clw/package-missing-p)
               (clw/install-packages))))
 ;;@@ theme
+;; 保持 doom-oksolar-light。曾试 modus-operandi-tinted：入口文件虽只 92 行，
+;; 但会 require-theme 'modus-themes 并生成 2371 个 face（约为 doom 的 2 倍），
+;; 冷启动 load-theme 实测 ~79ms，比 doom 的 ~50ms 还慢，故不采用。
 (use-package doom-themes
   :functions clw/load-theme
   :init (clw/load-theme 'doom-oksolar-light)
@@ -1868,7 +1855,7 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
   (defvar-local nn-mode-line--coding-cache nil)
 
   (defvar nn-mode-line--vc-cache-table (make-hash-table :test #'equal)
-    "repo root -> (BRANCH-STRING . HEAD-MTIME)")
+    "repo root -> (BRANCH-STRING HEAD-MTIME HEAD-FILE)")
 
   (defvar-local nn-mode-line--vc-root nil
     "缓存 (PATH . ROOT)；ROOT 为 `none' 表示不在仓库中。")
@@ -1903,30 +1890,42 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
     "Return the git root for the current buffer, or nil.
 Cached per buffer and invalidated when PATH (buffer file/dir) changes."
     (let ((path (or buffer-file-name default-directory)))
-      (when (and path (not (file-remote-p path)))
+      (when path
 	(unless (and nn-mode-line--vc-root
                      (equal (car nn-mode-line--vc-root) path))
           (setq nn-mode-line--vc-root
-		(cons path (or (locate-dominating-file path ".git") 'none))))
+		(cons path (if (file-remote-p path)
+                               'none
+                             (or (locate-dominating-file path ".git") 'none)))))
 	(let ((root (cdr nn-mode-line--vc-root)))
           (unless (eq root 'none) root)))))
 
+  (defun nn-mode-line--vc--build (root)
+    "Build cache entry (BRANCH MTIME HEAD-FILE) for ROOT, or nil."
+    (when-let* ((head (nn-mode-line--head-file root))
+                (mtime (file-attribute-modification-time (file-attributes head))))
+      (list (concat nn-mode-line--git
+                    (propertize (nn-mode-line--read-branch head)
+                                'face 'nn-mode-line-vcs))
+            mtime
+            head)))
+
   (defun nn-mode-line--vc--refresh ()
     "Return \"<branch-icon> branch\" for the current buffer, or nil.
-Cached per repository root and invalidated when .git/HEAD changes."
+Cached per repository root and invalidated when .git/HEAD changes.
+HEAD 的路径也一并缓存：每次 redisplay 只 stat 一个文件，不再重复
+用 `file-directory-p'/`expand-file-name' 解析 .git。"
     (ignore-errors
-      (when-let* ((root (nn-mode-line--vc-root))
-                  (head (nn-mode-line--head-file root))
-                  (attrs (file-attributes head))
-                  (mtime (file-attribute-modification-time attrs)))
-	(let ((cached (gethash root nn-mode-line--vc-cache-table)))
-          (if (and cached (equal (cdr cached) mtime))
+      (when-let* ((root (nn-mode-line--vc-root)))
+        (let* ((cached (gethash root nn-mode-line--vc-cache-table))
+               (head (nth 2 cached))
+               (mtime (and head (file-attribute-modification-time
+                                 (file-attributes head)))))
+          (if (and mtime (equal (nth 1 cached) mtime))
               (car cached)
-            (let ((branch (concat nn-mode-line--git
-                                  (propertize (nn-mode-line--read-branch head)
-                                              'face 'nn-mode-line-vcs))))
-              (puthash root (cons branch mtime) nn-mode-line--vc-cache-table)
-              branch))))))
+            (when-let* ((entry (nn-mode-line--vc--build root)))
+              (puthash root entry nn-mode-line--vc-cache-table)
+              (car entry)))))))
 
   (defun nn-mode-line--coding-refresh (&rest _)
     "Refresh coding-system segment for the current buffer."
@@ -2297,7 +2296,9 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   (defun corfu-enable-always-in-minibuffer ()
     "Enable Corfu in the minibuffer if Vertico is not active."
     (unless (or (bound-and-true-p vertico--input)
-                (eq (current-local-map) read-passwd-map))
+                ;; read-passwd.el 未加载时 read-passwd-map 是 void，
+                ;; 用 bound-and-true-p 守卫，避免 M-: 等场景报 void-variable
+                (eq (current-local-map) (bound-and-true-p read-passwd-map)))
       ;; (setq-local corfu-auto nil) ;; Enable/disable auto completion
       (setq-local corfu-echo-delay nil ;; Disable automatic echo and popup
                   corfu-popupinfo-delay nil)
@@ -2844,7 +2845,14 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@BREADCRUMB 面包屑导航
 (use-package breadcrumb
   :defer t
-  :hook (after-init . breadcrumb-mode))
+  :init
+  ;; 同 diff-hl：启动时启用要遍历所有 buffer，实测 4 ms，推迟到空闲周期。
+  (run-with-timer
+   0.5 nil
+   (lambda ()
+     (require 'breadcrumb nil t)
+     (when (fboundp 'breadcrumb-mode)
+       (breadcrumb-mode 1)))))
 
 ;;@@POPPER 管理弹出的各种临时 buffer
 ;; 这样就不会打破 Window 布局
@@ -2963,9 +2971,17 @@ This differs from Avy's goto-char-timer in how it processes parens."
          ("<left-fringe> <mouse-1>" . diff-hl-diff-goto-hunk)
          ("M-]" . diff-hl-next-hunk)
          ("M-[" . diff-hl-previous-hunk))
-  :hook ((after-init . global-diff-hl-mode)
-         (dired-mode . diff-hl-dired-mode)
+  :hook ((dired-mode . diff-hl-dired-mode)
          (vc-dir-mode . turn-on-diff-hl-mode))
+  :init
+  ;; 推迟到首个空闲周期：启动时 `global-diff-hl-mode' 要给每个已有 buffer
+  ;; 装钩子并做一次 VC 查询，实测 15 ms（约占启动时长 5%）。
+  (run-with-timer
+   0.5 nil
+   (lambda ()
+     (require 'diff-hl nil t)
+     (when (fboundp 'global-diff-hl-mode)
+       (global-diff-hl-mode 1))))
   :commands diff-hl-magit-post-refresh
   :config
   (with-eval-after-load 'magit

@@ -50,18 +50,20 @@ compile_emacs() {
     ./autogen.sh || return 1
 
     # --------------------------
-    # 7. 配置 TUI 专用选项（禁用 GUI）
+    # 7. 配置编译选项（PGTK：Wayland GUI）
     # --------------------------
-    echo "🔧 配置编译选项（TUI 模式）..."
+    echo "🔧 配置编译选项（PGTK/Wayland 模式）..."
+    # 启用原生编译（AOT：构建时预编译内置 Elisp）
     ./configure \
         --prefix="$prefix" \
-        --with-native-compilation=aot \  # 启用原生编译（加速 TUI）
+        --with-native-compilation=aot \
         --with-gnutls \
         --without-dbus \
         --without-pop \
         --with-xpm \
         --with-imagemagick \
-	--with-tree-sitter
+	--with-tree-sitter \
+        --with-pgtk
 
     # --------------------------
     # 8. 编译（使用所有 CPU 核心）

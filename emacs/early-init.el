@@ -17,6 +17,8 @@
 ;; 且 diminish 等早加载包在初始化前 require 会报 Cannot open load file。
 
 ;; 把 ~50 个包的 autoload 合并进一个 quickstart 文件，显著减少启动期文件 IO。
+;; `package-activate-all' 只按 `package-quickstart-file' 是否存在决定用不用缓存，
+;; 这里的赋值用于让安装/删除包时自动重建缓存。
 ;; 注意：增删包后需刷新缓存（已在 `clw/install-packages' 收尾自动做）；
 ;; 手动装包后可运行 M-x package-quickstart-refresh。
 (setq package-quickstart t)
