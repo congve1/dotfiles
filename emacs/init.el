@@ -1003,15 +1003,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (setq-default c-recognize-knr-p nil)
   ;;(setq c-basic-offset 4)
   (setopt c-electric-pound-behavior '(alignleft)))
-;;@@ HIPPIE 方便的路径补全
-(use-package hippie-exp
-  :bind ([remap dabbrev-expand] . hippie-expand)
-  :custom (hippie-expand-try-functions-list
-           '(try-complete-file-name-partially
-             try-complete-file-name
-             try-expand-dabbrev
-             try-expand-dabbrev-all-buffers
-             try-expand-dabbrev-from-kill)))
+;;@@ M-/ 手动触发补全（corfu / capf 链）
+;; 原先把 dabbrev-expand 重映射到 hippie-expand 做文本展开；其词补全已由
+;; cape-dabbrev (C-c p d) / cape-file 覆盖，这里改走 `completion-at-point'，
+;; 让 M-/ 触发 corfu 弹窗显示语义候选（LSP、SLIME、cape 等 capf 后端）。
+(define-key (current-global-map) [remap dabbrev-expand] #'completion-at-point)
 ;;@@ TREESIT 基于语法树的 PL 前端工具
 (use-package treesit
   :when (treesit-available-p)
@@ -2328,6 +2324,14 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
             (lambda ()
               (setq-local corfu-auto nil)
               (corfu-mode)))
+  ;; SLIME REPL 的 major-mode 是 slime-repl-mode（手写、非 prog-mode 派生），
+  ;; 不会触发上面的 prog-mode-hook，需单独启用。它内部已由 slime-setup-completion
+  ;; 把 slime--completion-at-point 注册进 buffer-local capf，corfu 一开就有
+  ;; SLIME 候选。REPL 里连续打字时自动弹窗太吵，改成手动 TAB 才弹。
+  (add-hook 'slime-repl-mode-hook
+            (lambda ()
+              (setq-local corfu-auto nil)
+              (corfu-mode 1)))
   :config
   ;; 把 buffer 内的补全候选转交 minibuffer（consult/vertico/orderless）。
   ;; 不绑定按键，按 M-x clw/corfu-move-to-minibuffer 调用。
@@ -2657,8 +2661,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ("M-." . embark-dwim)              ; 直接执行默认动作（不弹菜单）
   ("C-h b" . embark-bindings)        ; 查看按键绑定（替代 describe-bindings）
   ("C-h B" . embark-bindings-at-point)
-  ("M-n" . embark-next-symbol)       ; 在相邻同类型 target 间循环
-  ("M-p" . embark-previous-symbol)
+  ;; M-n/M-p 不绑到全局：embark-identifier-map 自带的 "n"/"p" 已能在 C-. 对
+  ;; 符号类 target 的动作菜单里循环同类型 target；绑全局会和代码 buffer 里
+  ;; symbol-overlay / slime-mode 的 M-n/M-p（跳符号出现位置 / 编译告警）重复，
+  ;; 而 minor-mode-map 优先级高于全局，全局绑定在那里反而是死键。
   :commands (clw/embark-act-with-completing-read)
   :custom
   ;; 执行动作后不退出 minibuffer，便于连续对多个候选执行动作
@@ -3170,12 +3176,12 @@ git status 默认把整体未跟踪的目录折叠成一条 \"dir/\"，而
              (file (cdr entry))
              (info (assoc code magit-fast-status-alist)))
         (magit-insert-section (file file t)
-          (magit-insert-heading
-            (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
-                        'font-lock-face
-                        (if info (cddr info) 'magit-diff-file-heading)))
-          (magit-insert-section-body
-            (clw/magit-fast-insert-hunks)))))
+                              (magit-insert-heading
+                               (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
+                                           'font-lock-face
+                                           (if info (cddr info) 'magit-diff-file-heading)))
+                              (magit-insert-section-body
+                               (clw/magit-fast-insert-hunks)))))
     (insert "\n"))
 
   ;; RET 看 diff 详情（fast 版 status 里 magit-visit-thing 是占位符，直接调用报错）：
@@ -3246,7 +3252,10 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
 ;;@@ puni
 (use-package puni
   :hook ((prog-mode . puni-mode)
-         (emacs-lisp-mode . (lambda () (puni-mode -1))))
+         ;; .lisp 进 lisp-mode（派生 prog-mode），与 paredit 同时启用会抢
+         ;; 括号编辑按键；paredit 由上面的 :hook 负责，这里排除 puni
+         (emacs-lisp-mode . (lambda () (puni-mode -1)))
+         (lisp-mode . (lambda () (puni-mode -1))))
   :bind (:map puni-mode-map
          ("M-(" . puni-wrap-round)
          ("C-(" . puni-slurp-backward)
@@ -3256,10 +3265,6 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
          ("M-<up>" . puni-splice-killing-backward)
          ("C-w" . nil)))
 ;;@@ COMMON-LISP / SLIME（学习用）
-;; 外部依赖（Emacs 之外，需自行安装）：
-;;   sudo apt install sbcl                      ; Lisp 实现
-;;   curl -O https://beta.quicklisp.org/quicklisp.lisp
-;;   sbcl --load quicklisp.lisp --eval '(quicklisp-quickstart:install)' --quit
 ;; slime 已列入上面的 `package-selected-packages'，由启动时的
 ;; `clw/package-missing-p' → `clw/install-packages' 自动补装（含代理与
 ;; package-quickstart-refresh），无需手动 package-install。
@@ -3267,12 +3272,18 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
 ;; 外部依赖（Emacs 之外，需自行安装）：
 ;;   sudo apt install sbcl                      ; Lisp 实现
 ;;   curl -O https://beta.quicklisp.org/quicklisp.lisp
-;;   sbcl --load quicklisp.lisp --eval '(quicklisp-quickstart:install)' --quit
+;;   sbcl --load quicklisp.lisp \
+;;        --eval '(quicklisp-quickstart:install)' \
+;;        --eval '(ql:add-to-init-file)' \
+;;        --quit
+;;   `ql:add-to-init-file' 把加载 ~/quicklisp/setup.lisp 写进 ~/.sbclrc，
+;;   否则 SBCL 启动时没有 QL 包，下面 slime-quicklisp contrib 会在 REPL 报
+;;   "Could not find Quicklisp already loaded."。
 ;; 装好后 M-x slime 起 REPL。
 ;;
-;; 说明：.lisp 默认进 `lisp-mode'（派生自 prog-mode），所以上面的
-;; paredit/rainbow-delimiters/corfu 会自动生效；但 puni 也挂在 prog-mode，
-;; 会和 paredit 同时启用、抢括号编辑按键，故这里对 lisp-mode 关掉 puni。
+;; 说明：.lisp 默认进 `lisp-mode'（派生自 prog-mode），上面的
+;; paredit/rainbow-delimiters/corfu 会自动生效；puni 已在自身块里对
+;; lisp-mode 排除，避免与 paredit 抢括号按键。
 ;; 全程 :defer + :commands，启动期不加载 slime、不联网。
 (use-package slime
   :defer t
@@ -3287,11 +3298,11 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   (let ((helper (expand-file-name "~/quicklisp/slime-helper.el")))
     (when (file-exists-p helper)
       (load helper nil t)))
-  ;; 只留 paredit：puni 的 prog-mode-hook 会在 .lisp 里启用，与 paredit 冲突
-  (add-hook 'lisp-mode-hook (lambda () (puni-mode -1)))
   :config
-  ;; slime-fancy 是官方推荐的 contrib 合集（含 autodoc、fuzzy、presentations 等）
-  (setq slime-contribs '(slime-fancy))
+  ;; slime-fancy 是官方推荐的 contrib 合集；slime-quicklisp 额外要求 Lisp 镜像
+  ;; 里已加载 Quicklisp（见上方 ql:add-to-init-file），没装时该 contrib 在 REPL
+  ;; 里调用 ql:quickload 会报错。slime-asdf 会自行 (require "asdf")，无需另装。
+  (setq slime-contribs '(slime-fancy slime-quicklisp slime-asdf slime-mrepl))
   (slime-setup))
 ;;@@ aggressive-indent
 (use-package aggressive-indent
