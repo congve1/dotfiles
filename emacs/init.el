@@ -2327,7 +2327,10 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   ;; SLIME REPL 的 major-mode 是 slime-repl-mode（手写、非 prog-mode 派生），
   ;; 不会触发上面的 prog-mode-hook，需单独启用。它内部已由 slime-setup-completion
   ;; 把 slime--completion-at-point 注册进 buffer-local capf，corfu 一开就有
-  ;; SLIME 候选。REPL 里连续打字时自动弹窗太吵，改成手动 TAB 才弹。
+  ;; SLIME 候选。REPL 里连续打字时自动弹窗太吵，故 corfu-auto 置 nil，
+  ;; 改用手动 M-/（已 remap 成 completion-at-point）才弹；
+  ;; 注意这里 TAB 不会触发补全：slime-repl-mode-map 未绑 TAB，且全局
+  ;; tab-always-indent 保持默认 t（只缩进），配置里那行 'complete 是注释掉的。
   (add-hook 'slime-repl-mode-hook
             (lambda ()
               (setq-local corfu-auto nil)
