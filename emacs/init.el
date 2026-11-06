@@ -1676,6 +1676,7 @@ Lisp function does not specify a special indentation."
           org-modern ; org-mode 现代化外观
           org-appear ; 光标进入自动展开 emphasis/link 标记
           toc-org ; 自动维护 :TOC: 目录
+          slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
           ))
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
@@ -2102,11 +2103,14 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
 ;;@@ACE-WINDOW 窗口字母标号跳转（替代 winum）
 (defun clw/other-window ()
   "两个窗口时直接 `other-window'，多于两个才用 ace-window 选择。
-这样常见双窗口布局下 C-x o 不再弹标号/动作菜单，也无需加载 ace-window。"
+这样常见双窗口布局下 C-x o 不再弹标号/动作菜单，也无需加载 ace-window。
+注意 `ace-window' 的签名是 (ace-window ARG)，interactive 调用由 `p' 传入 1，
+但这里是从 Lisp 直接调用，必须显式传 1 走 `ace-select-window' 分支；
+传 0/4/16 会变成切换 ignore / 交换 / 删除窗口，不是选择。"
   (interactive)
   (if (= 2 (length (window-list nil 'nomini)))
       (other-window 1)
-    (ace-window)))
+    (ace-window 1)))
 (use-package ace-window
   :bind (("M-o" . ace-window)
          ("C-x o" . clw/other-window)
@@ -3251,6 +3255,44 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
          ("C-{" . puni-barf-backward)
          ("M-<up>" . puni-splice-killing-backward)
          ("C-w" . nil)))
+;;@@ COMMON-LISP / SLIME（学习用）
+;; 外部依赖（Emacs 之外，需自行安装）：
+;;   sudo apt install sbcl                      ; Lisp 实现
+;;   curl -O https://beta.quicklisp.org/quicklisp.lisp
+;;   sbcl --load quicklisp.lisp --eval '(quicklisp-quickstart:install)' --quit
+;; slime 已列入上面的 `package-selected-packages'，由启动时的
+;; `clw/package-missing-p' → `clw/install-packages' 自动补装（含代理与
+;; package-quickstart-refresh），无需手动 package-install。
+;;
+;; 外部依赖（Emacs 之外，需自行安装）：
+;;   sudo apt install sbcl                      ; Lisp 实现
+;;   curl -O https://beta.quicklisp.org/quicklisp.lisp
+;;   sbcl --load quicklisp.lisp --eval '(quicklisp-quickstart:install)' --quit
+;; 装好后 M-x slime 起 REPL。
+;;
+;; 说明：.lisp 默认进 `lisp-mode'（派生自 prog-mode），所以上面的
+;; paredit/rainbow-delimiters/corfu 会自动生效；但 puni 也挂在 prog-mode，
+;; 会和 paredit 同时启用、抢括号编辑按键，故这里对 lisp-mode 关掉 puni。
+;; 全程 :defer + :commands，启动期不加载 slime、不联网。
+(use-package slime
+  :defer t
+  :commands (slime slime-connect slime-mode)
+  :init
+  ;; SLIME 通过这个变量找到 Lisp 实现；不存在时给出明确提示而不是启动失败
+  (setq inferior-lisp-program "sbcl")
+  (unless (executable-find "sbcl")
+    (display-warning 'clw "Common Lisp：未找到 sbcl，请先安装（sudo apt install sbcl）" :warning))
+  ;; Quicklisp 生成的 slime-helper 会把 SLIME 指向 QL 安装的版本，
+  ;; 存在才加载；没有就退回到自己 package-install 的 slime
+  (let ((helper (expand-file-name "~/quicklisp/slime-helper.el")))
+    (when (file-exists-p helper)
+      (load helper nil t)))
+  ;; 只留 paredit：puni 的 prog-mode-hook 会在 .lisp 里启用，与 paredit 冲突
+  (add-hook 'lisp-mode-hook (lambda () (puni-mode -1)))
+  :config
+  ;; slime-fancy 是官方推荐的 contrib 合集（含 autodoc、fuzzy、presentations 等）
+  (setq slime-contribs '(slime-fancy))
+  (slime-setup))
 ;;@@ aggressive-indent
 (use-package aggressive-indent
   :hook (emacs-lisp-mode . aggressive-indent-mode))
