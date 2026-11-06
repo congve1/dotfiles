@@ -3176,12 +3176,12 @@ git status 默认把整体未跟踪的目录折叠成一条 \"dir/\"，而
              (file (cdr entry))
              (info (assoc code magit-fast-status-alist)))
         (magit-insert-section (file file t)
-                              (magit-insert-heading
-                               (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
-                                           'font-lock-face
-                                           (if info (cddr info) 'magit-diff-file-heading)))
-                              (magit-insert-section-body
-                               (clw/magit-fast-insert-hunks)))))
+          (magit-insert-heading
+            (propertize (format "%-10s%s\n" (if info (cadr info) code) file)
+                        'font-lock-face
+                        (if info (cddr info) 'magit-diff-file-heading)))
+          (magit-insert-section-body
+            (clw/magit-fast-insert-hunks)))))
     (insert "\n"))
 
   ;; RET 看 diff 详情（fast 版 status 里 magit-visit-thing 是占位符，直接调用报错）：
@@ -3417,7 +3417,11 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   (defun clw/project-prompt ()
     "Prompt for a project with session labels and 'choose a dir' fallback.
 Combines project-x's session label display with the built-in
-'... (choose a dir)' option from `project-prompt-project-dir'."
+'... (choose a dir)' option from `project-prompt-project-dir'.
+把 `dir-choice' 钉在 Vertico 列表末尾：默认的
+`vertico-sort-history-length-alpha' 每次会按历史/长度重排候选，
+否则这一项会随历史变化落在忽前忽后的「随机」位置。Vertico 会优先采用
+候选表 metadata 里的 `display-sort-function'，故在此只重排其余项目。"
     (let* ((dir-choice "... (choose a dir)")
            (dirs (project-known-project-roots))
            (projects (delq nil
@@ -3432,7 +3436,18 @@ Combines project-x's session label display with the built-in
                                 (cons (format "%s" label) root)))
                             projects))
            (candidates (append (mapcar #'car choices) (list dir-choice)))
-           (choice (completing-read "Switch to project: " candidates nil t)))
+           (default-sort (or (bound-and-true-p vertico-sort-function) #'identity))
+           (sort-fn (lambda (cands)
+                      (if (member dir-choice cands)
+                          (append (funcall default-sort
+                                           (delete dir-choice (copy-sequence cands)))
+                                  (list dir-choice))
+                        (funcall default-sort cands))))
+           (collection (lambda (string pred action)
+                         (if (eq action 'metadata)
+                             `(metadata (display-sort-function . ,sort-fn))
+                           (complete-with-action action candidates string pred))))
+           (choice (completing-read "Switch to project: " collection nil t)))
       (if (equal choice dir-choice)
           (read-directory-name "Select directory: " default-directory nil t)
         (cdr (assoc choice choices)))))
@@ -3441,6 +3456,29 @@ Combines project-x's session label display with the built-in
   (setopt project-x-restore-last-project-on-startup nil)
   ;; 同时保存 magit/eshell/vterm/compilation 等特殊 buffer
   (setopt project-x-save-extra-buffers t)
+  ;; `project-x--restore-buffer' 对 :type compilation 的 buffer 会先
+  ;; (compilation-mode)（该 mode 把 buffer 设成只读）再 (insert ...)，
+  ;; 抛 "Buffer is read-only"；而 `project-x--window-state-restore' 用 mapcar
+  ;; 调用它且没有 condition-case，一个 buffer 失败会中断整个窗口重建。
+  ;; 给 orig 动态绑定 inhibit-read-only 让 insert 成功；其余错误则记 warning
+  ;; 并返回 nil（mapcar 的 delq nil 会跳过该 buffer，其它 buffer 继续恢复）。
+  (clw/check-private-advice 'project-x--restore-buffer '(1 . 1)
+                            "project-x--restore-buffer :around")
+  (defun clw/project-x--restore-buffer-safe (orig item)
+    "兜底 `project-x--restore-buffer'：单个 buffer 恢复失败不中断窗口重建。
+ORIG 为原函数，ITEM 为 session 中的 buffer 条目。"
+    (condition-case err
+        (let ((inhibit-read-only t))
+          (funcall orig item))
+      (error
+       (display-warning
+        'clw
+        (format "project-x: 跳过无法恢复的 buffer %S：%s"
+                item (error-message-string err))
+        :warning)
+       nil)))
+  (advice-add 'project-x--restore-buffer :around
+              #'clw/project-x--restore-buffer-safe)
   (project-x-mode 1)
   )
 ;;@@P-SEARCH 检索工具
