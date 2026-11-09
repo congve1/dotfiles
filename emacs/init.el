@@ -1621,7 +1621,11 @@ Lisp function does not specify a special indentation."
 
 ;;@3 外部安装的 elisp 包
 ;;@@ 指定需要安装的包
-(setopt package-selected-packages
+;; 自动安装的唯一事实源是这个独立变量，而非 package-selected-packages：
+;; custom.el 会把 package-selected-packages 存进 user theme，load-theme 时重新
+;; 应用并覆盖下面的 setopt——只改 init.el 新加的包会被冲掉，自动安装检测不到。
+;; 故检测/安装都遍历 clw/package-list；setopt 仅为 package-install/autoremove 服务。
+(defvar clw/package-list
         '(;; 安装的包列表
           markdown-mode ; 提供 emacs 中的 markdown 支持
           ace-window ; 窗口字母标号跳转（M-o，替代 winum）
@@ -1674,9 +1678,10 @@ Lisp function does not specify a special indentation."
           toc-org ; 自动维护 :TOC: 目录
           slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
           ))
+(setopt package-selected-packages clw/package-list)
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
-Run after changing `package-selected-packages' or `package-vc-selected-packages'.
+Run after changing `clw/package-list' or `package-vc-selected-packages'.
 
 自动管理代理：若代理未开启，会在安装前开启并在结束后关闭；若已开启，则
 保持不动。
@@ -1697,7 +1702,7 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
       (clw/proxy-toggle))
     (unwind-protect
         (progn
-          (dolist (pkg package-selected-packages)
+          (dolist (pkg clw/package-list)
             (unless (package-installed-p pkg)
               (condition-case err
                   (package-install pkg)
@@ -1775,7 +1780,7 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 (defun clw/package-missing-p ()
   "Return non-nil if any selected package is missing."
   (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
-               package-selected-packages)
+               clw/package-list)
       (cl-some (lambda (spec)
                  (not (file-directory-p
                        (expand-file-name (symbol-name (car spec))
@@ -3268,9 +3273,9 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
          ("M-<up>" . puni-splice-killing-backward)
          ("C-w" . nil)))
 ;;@@ COMMON-LISP / SLIME（学习用）
-;; slime 已列入上面的 `package-selected-packages'，由启动时的
+;; slime 已列入上面的 `clw/package-list'，由启动时的
 ;; `clw/package-missing-p' → `clw/install-packages' 自动补装（含代理与
-;; package-quickstart-refresh），无需手动 package-install。
+;; package-quickstart-refresh），无需手动 package-install、也无需同步 custom.el。
 ;;
 ;; 外部依赖（Emacs 之外，需自行安装）：
 ;;   sudo apt install sbcl                      ; Lisp 实现
