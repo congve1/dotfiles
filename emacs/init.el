@@ -127,7 +127,7 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
 (setopt completions-header-format nil)  ; 补全 buffer 中不显示汇总信息
 (setopt completions-max-height 20)      ; 补全 buffer 限高为 20 行
 (setopt completion-auto-select nil)     ; 触发补全时不移动焦点到补全 buffer
-;; completion-styles 由下方 orderless 配置统一设定为 '(orderless basic)
+;; completion-styles 由下方 fussy 配置统一设定为 '(fussy basic)
 ;; 也许可以考虑试试 Protesilaos Stavrou 的时尚小垃圾 -- mct.el
 ;; https://protesilaos.com/emacs/mct
 ;;@@ 总是使用 y-or-n-p，可以少打字
@@ -1639,7 +1639,7 @@ Lisp function does not specify a special indentation."
           eldoc-box ; 提供悬浮的 eldoc 补全
           vundo ; 可视化 undo，undo-tree 的替代品
           magit ; 强大的 git UI
-          orderless ; 乱序补全后端
+          fussy ; 模糊补全 + fzf 打分排序（替代 orderless）
           consult ; 异步查询框架
           consult-eglot
           wgrep ; 基于 grep 的批量替换工具
@@ -1732,6 +1732,9 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                        (mapconcat (lambda (p) (symbol-name (car p)))
                                   (nreverse failed-packages) ", "))
             (message "[clw] 所有包安装成功")))
+      ;; `package-selected-packages' 会被 custom.el 在 load-theme 时覆盖，
+      ;; 这里同步成 init.el 的 clw/package-list 并写回 custom.el，保持两处一致
+      (customize-save-variable 'package-selected-packages clw/package-list)
       ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
       (when (bound-and-true-p package-quickstart)
         (package-quickstart-refresh))
@@ -1795,6 +1798,10 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
           ;; 加速 magit：单次 porcelain 缓存替代重 diff（默认拉最新提交，
           ;; 等价 use-package 的 :rev :newest；package-vc spec 不支持 :rev）
           (magit-fast :url "https://github.com/zHaOdANiuu/magit-fast")
+          ;; fzf-native：fussy 用的 C 原生模糊打分；包内 bin/ 带各平台预编译
+          ;; 动态库（Linux/Windows/macOS），走 module-load，无需本地编译
+          (fzf-native :url "https://github.com/dangduc/fzf-native"
+                      :files ("*.el" "bin"))
           )
         )
 
@@ -2586,16 +2593,27 @@ This differs from Avy's goto-char-timer in how it processes parens."
          :map isearch-mode-map
          ("C-'"     . clw/avy-isearch)
          ("M-j"     . clw/avy-isearch)))
-;;@@ORDERLESS 好用的模糊搜索插件
-(use-package orderless
+;;@@FUSSY 模糊补全（fzf-native 打分，替代 orderless）
+;; 按官方 README 的推荐组合：
+;; - fussy-setup-fzf：设 completion-styles / category overrides / consult tofu，
+;;   过滤改走 fussy-filter-by-scoring，批量打分用 fussy-fzf-score
+;; - fussy-eglot-setup：eglot 类别覆盖
+;; - fussy-corfu-setup：corfu 集成（:around advice，corfu 下自动禁用 cache、
+;;   限量 5000 候选、首字母预过滤、关闭 prefer-prefix），无需手写 advice/hook
+;; fzf-native 的预编译动态库在包内 bin/，首次补全需要时才 module-load。
+(use-package fussy
+  ;; 延迟到首次补全（completion-styles 里 fussy 的 autoload）再加载：
+  ;; 未安装时不阻塞启动，好让 startup 的自动安装把 fussy/fzf-native 补上
+  :defer t
+  :custom
+  (completion-styles '(fussy basic))
+  (fussy-use-cache t)
   :config
-  (setopt completion-styles '(orderless basic))
-  (setopt completion-category-overrides
-          '((file (styles basic partial-completion))
-            ;; eglot 补全默认强制走 eglot--dumb-flex，覆盖为 orderless
-            ;; 让 corfu 前端的 LSP 候选也支持多词任意顺序匹配
-            (eglot-capf (styles orderless basic))))
-  )
+  (fussy-setup-fzf)
+  (fussy-eglot-setup)
+  (fussy-corfu-setup)
+  ;; 同分时按历史、再按长度排序（官方 My Configuration 的偏好）
+  (setq fussy-compare-same-score-fn 'fussy-histlen->strlen<))
 ;;@@ consult
 ;; M-y DWIM：紧跟 C-y 之后 = 原生 yank-pop 循环（顶层 kill-ring，连按快翻）；
 ;; 单独按下 = consult-yank-pop 菜单（深层挑选）
