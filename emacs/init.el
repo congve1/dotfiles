@@ -456,11 +456,25 @@ If in WSL, try to get gateway via system commands."
 (keymap-global-set "<f9>" 'clw/toggle-alpha)
 ;;@2 内置的 emacs 包
 ;;@@PACKAGE
-;; 设置包源
-(setopt package-archives
-        '(("melpa" . "https://melpa.org/packages/")
-          ("nongnu" . "https://elpa.nongnu.org/nongnu/")
-          ("gnu" . "https://elpa.gnu.org/packages/")))
+;; 包源白名单。第三方包可能在 autoload 里擅自
+;; (add-to-list 'package-archives ...)（如 etaf-install 会加 etaf.top）；
+;; 这些源若走代理不可达，package-refresh-contents 的同步请求会卡死界面。
+;; 故把 package-archives 当白名单：启动后与每次 refresh 前都强制恢复。
+(defvar clw/package-archives
+  '(("melpa" . "https://melpa.org/packages/")
+    ("nongnu" . "https://elpa.nongnu.org/nongnu/")
+    ("gnu" . "https://elpa.gnu.org/packages/")))
+(setopt package-archives clw/package-archives)
+
+(defun clw/package-archives-reset (&rest _)
+  "把 `package-archives' 重置为白名单，剔除第三方包偷偷追加的源。"
+  (setq package-archives (copy-tree clw/package-archives)))
+
+;; 启动后清一次：package-activate-all 加载 quickstart 时，etaf-install 之类的
+;; autoload 会 add-to-list，这里覆盖掉，避免后续 refresh 访问不可达源
+(add-hook 'emacs-startup-hook #'clw/package-archives-reset)
+;; 每次刷新索引前再清一次，保证 package-refresh-contents 只访问白名单源
+(advice-add 'package-refresh-contents :before #'clw/package-archives-reset)
 ;; 不检查签名
 (setopt package-check-signature nil)
 (setopt package-archive-priorities
