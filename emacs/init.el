@@ -1747,8 +1747,13 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                                   (nreverse failed-packages) ", "))
             (message "[clw] 所有包安装成功")))
       ;; `package-selected-packages' 会被 custom.el 在 load-theme 时覆盖，
-      ;; 这里同步成 init.el 的 clw/package-list 并写回 custom.el，保持两处一致
-      (customize-save-variable 'package-selected-packages clw/package-list)
+      ;; 这里同步成 init.el 的 clw/package-list 并写回 custom.el，保持两处一致。
+      ;; 用 condition-case 兜底：cleanup 里即使 custom-file 不可写也不能中断，
+      ;; 否则后面的 quickstart 刷新和关闭代理都不会执行。
+      (condition-case err
+          (customize-save-variable 'package-selected-packages clw/package-list)
+        (error (message "[clw] 同步 package-selected-packages 失败：%s"
+                        (error-message-string err))))
       ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
       (when (bound-and-true-p package-quickstart)
         (package-quickstart-refresh))
@@ -3353,7 +3358,18 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
         '(slime-filename-completion
           slime-fuzzy-complete-symbol
           slime-c-p-c-completion-at-point
-          slime-simple-completion-at-point)))
+          slime-simple-completion-at-point))
+  ;; 未连接 REPL 时 SLIME 的 capf 会抛 "Not connected."，而
+  ;; `completion--capf-wrapper' 不捕获错误，会中断整条 capf 链（连 cape-file
+  ;; 等非 SLIME 后端都一起失效）。未连接时直接返回 nil，让补全链继续。
+  (clw/check-private-advice 'slime--completion-at-point '(0 . 0)
+                            "slime--completion-at-point :around")
+  (defun clw/slime-completion-at-point-safe (orig)
+    "未连接 REPL 时返回 nil，避免中断 `completion-at-point-functions' 链。"
+    (when (slime-connected-p)
+      (funcall orig)))
+  (advice-add 'slime--completion-at-point :around
+              #'clw/slime-completion-at-point-safe))
 ;;@@ aggressive-indent
 (use-package aggressive-indent
   :hook (emacs-lisp-mode . aggressive-indent-mode))
