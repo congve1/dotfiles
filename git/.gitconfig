@@ -27,6 +27,7 @@
 [core]
     autocrlf = input             # 提交转 LF，checkout 不转换（跨 Windows/WSL 防 ^M）
     pager = less -R
+    excludesfile = ~/.gitignore  # 全局忽略规则（stow 自 git/.gitignore）
 [diff]
     colorMoved = default          # 移动的代码块着色显示
 [merge]

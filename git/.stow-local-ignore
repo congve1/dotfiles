@@ -1,0 +1,20 @@
+# 本包（git）的 stow 忽略名单。
+# 注意：.stow-local-ignore 会【替换】stow 的内置默认忽略列表，而不是追加。
+# 这里复制 GNU Stow 2.4.1 的默认列表，但删除 `\.gitignore`，
+# 以便 git/.gitignore 能被 stow 链接到 ~/.gitignore。
+# `\.git` 仍保留，避免误把 .git 目录/文件链接出去。
+RCS
+.+,v
+CVS
+\.\#.+
+\.cvsignore
+\.svn
+_darcs
+\.hg
+\.git
+\.gitmodules
+.+~
+\#.*\#
+^/README.*
+^/LICENSE.*
+^/COPYING

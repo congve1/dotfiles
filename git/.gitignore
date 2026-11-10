@@ -1,0 +1,78 @@
+# ==============================================================================
+# 全局 gitignore（stow: git/.gitignore -> ~/.gitignore）
+# 由 git/.gitconfig 的 [core] excludesfile 引用，对所有仓库生效；
+# 项目级 .gitignore 仍可覆盖或补充这里的规则。
+# ==============================================================================
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 编辑器 / IDE ----
+*~
+\#*\#
+.\#*
+*.swp
+*.swo
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ---- 临时 / 备份 / 日志 ----
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# ---- Node.js ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Rust ----
+target/
+
+# ---- JVM ----
+*.class
+.gradle/
+build/
+
+# ---- Emacs ----
+*.elc
+*.eln
+eln-cache/
+
+# ---- AI coding agents ----
+# 只忽略个人会话/本地设置。.claude/skills、.claude/commands、.claude/agents、
+# .claude/settings.json、AGENTS.md、.agents/ 等常被团队共享/跟踪，不能全局忽略。
+.aider*
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/cache/
+.claude/shell-snapshots/
+.claude/statsig/
+# Qoder 的 .qoder/ 目前只有 settings.local.json（命令权限白名单等个人状态），
+# 没有共享 rules/config，故整个目录忽略；若将来出现 .qoder/settings.json 等
+# 需要共享的配置，在项目级 .gitignore 用 ! 例外或 git add -f。
+.qoder/
+# 以下目录通常放可共享的 rules/config，全局忽略容易误伤，按需在项目级 .gitignore 开启：
+# .cursor/
+# .windsurf/
+# .continue/
+# .roo/
+# .gemini/
+# .opencode/
