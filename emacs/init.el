@@ -3343,7 +3343,17 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   ;; 里已加载 Quicklisp（见上方 ql:add-to-init-file），没装时该 contrib 在 REPL
   ;; 里调用 ql:quickload 会报错。slime-asdf 会自行 (require "asdf")，无需另装。
   (setq slime-contribs '(slime-fancy slime-quicklisp slime-asdf slime-mrepl))
-  (slime-setup))
+  (slime-setup)
+  ;; SLIME 默认 capf 是纯前缀补全（swank:simple-completions），输入 pard 不会
+  ;; 返回 parse-date；改用 fuzzy（swank:fuzzy-completions）。
+  ;; `slime-fuzzy-default-completion-ui' t 让 fuzzy 返回 capf 格式交给
+  ;; corfu/fussy，而不是 SLIME 自建的 *Completions* 界面。
+  (setq slime-fuzzy-default-completion-ui t)
+  (setq slime-completion-at-point-functions
+        '(slime-filename-completion
+          slime-fuzzy-complete-symbol
+          slime-c-p-c-completion-at-point
+          slime-simple-completion-at-point)))
 ;;@@ aggressive-indent
 (use-package aggressive-indent
   :hook (emacs-lisp-mode . aggressive-indent-mode))
@@ -3494,14 +3504,14 @@ Combines project-x's session label display with the built-in
   (setq project-prompter #'clw/project-prompt)
   ;; 启动时不自动恢复上次活动的项目，按需手动恢复 buffer/窗口布局
   (setopt project-x-restore-last-project-on-startup nil)
-  ;; 同时保存 magit/eshell/vterm/compilation 等特殊 buffer
-  (setopt project-x-save-extra-buffers t)
-  ;; `project-x--restore-buffer' 对 :type compilation 的 buffer 会先
-  ;; (compilation-mode)（该 mode 把 buffer 设成只读）再 (insert ...)，
-  ;; 抛 "Buffer is read-only"；而 `project-x--window-state-restore' 用 mapcar
-  ;; 调用它且没有 condition-case，一个 buffer 失败会中断整个窗口重建。
-  ;; 给 orig 动态绑定 inhibit-read-only 让 insert 成功；其余错误则记 warning
-  ;; 并返回 nil（mapcar 的 delq nil 会跳过该 buffer，其它 buffer 继续恢复）。
+  ;; 不保存 magit/eshell/vterm/compilation 等特殊 buffer：project-x 恢复它们时
+  ;; 只重建空壳（magit 无 section、compilation 是只有一行注释的假 buffer），
+  ;; 质量差且易触发 hook/vc 报错；只恢复 file/dired 更可靠。
+  (setopt project-x-save-extra-buffers nil)
+  ;; `project-x--window-state-restore' 用 mapcar 调 `project-x--restore-buffer'
+  ;; 且没有 condition-case，单个 buffer 恢复失败（文件已删、远程断开、只读 buffer
+  ;; insert 等）会中断整个窗口重建。这里兜底：失败记 warning 并返回 nil
+  ;; （mapcar 的 delq nil 会跳过该 buffer，其他 buffer 继续恢复）。
   (clw/check-private-advice 'project-x--restore-buffer '(1 . 1)
                             "project-x--restore-buffer :around")
   (defun clw/project-x--restore-buffer-safe (orig item)
