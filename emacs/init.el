@@ -3081,10 +3081,21 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ;; 扭曲 motion/TAB 行为，这里 buffer-local 置 nil（全局值保持不变）
   :hook (magit-status-mode . (lambda () (setq-local long-line-threshold nil)))
   :init
-  ;; magit status buffer 全 frame 打开
+  ;; magit status buffer 下方半屏打开。动作必须用 `display-buffer-pop-up-window'：
+  ;; `display-buffer-below-selected'/'display-buffer-in-direction' 是从*选中窗口*
+  ;; 里切高度，实测会把另一个编辑窗口压成 1-2 行。
   (add-to-list 'display-buffer-alist
-               (cons (cons 'major-mode 'magit-status-mode)
-                     (list 'display-buffer-full-frame)))
+               '((major-mode . magit-status-mode)
+                 (display-buffer-pop-up-window) (window-height . 0.5)
+                 (inhibit-same-window . t)))
+  ;; diff/revision 也要显式管住，否则 RET（`clw/magit-fast-diff' →
+  ;; `magit-diff-dwim'/`magit-show-commit'）弹出的窗口会按默认逻辑继续吃编辑窗口。
+  ;; 条件用 `derived-mode' 而非 `major-mode'：`magit-revision-mode' 派生自
+  ;; `magit-diff-mode'（magit-diff.el:3024），major-mode 条件匹配不到它。
+  (add-to-list 'display-buffer-alist
+               '((derived-mode . magit-diff-mode)
+                 (display-buffer-pop-up-window) (window-height . 0.6)
+                 (inhibit-same-window . t)))
   :commands magit-add-section-hook
   :config
   (put 'magit-clean 'disabled nil)
