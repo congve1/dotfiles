@@ -34,18 +34,31 @@
 ;; 私有函数，上游改名或改参数后会「静默」失效（旧 advice 匹配不到、或参数
 ;; 数量不对）。在挂 advice 之前核对函数存在性与参数个数，变了就显式告警，
 ;; 而不是等某天 magit / p-search 莫名坏掉才发现。
+(defun clw/func-arity (fn)
+  "求 FN 的参数表；function cell 若已被 advice 组合体占据则返回 `advised'。
+Emacs 32 的 advice 组合体是 oclosure（旧版为 special byte-code），组合体
+自身 arity 恒为 (0 . many) 且 32 不再提供 advice--function-target 这类
+剥离 API——组合体只能由当次加载验证过，二次 eval-buffer 时应跳过而非
+误报。"
+  (when (fboundp fn)
+    (let ((f (symbol-function fn)))
+      (cond
+       ((and (fboundp 'advice--p) (advice--p f)) 'advised)
+       ((condition-case nil (func-arity f) (error 'unavailable)))))))
+
 (defun clw/check-private-advice (fn arity label)
   "检查私有函数 FN 是否存在且参数个数为 ARITY，不符时警告 LABEL 对应的使用点。
 该检查既用于 advice 目标，也用于直接调用的私有 API。
-ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
-  (unless (and (fboundp fn)
-               (equal (condition-case nil (func-arity fn) (error nil)) arity))
-    (display-warning
-     'clw
-     (format "%s：%S 签名变化（期望 %S，实际 %S），相关私有 API 使用需复查"
-             label fn arity
-             (condition-case nil (func-arity fn) (error 'void-function)))
-     :warning)))
+ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。
+重复 eval-buffer 时 FN 已挂 advice，返回 `advised' 直接放行：契约在
+首次加载时已按真实定义校验过。"
+  (let ((actual (clw/func-arity fn)))
+    (unless (or (eq actual 'advised) (equal actual arity))
+      (display-warning
+       'clw
+       (format "%s：%S 签名变化（期望 %S，实际 %S），相关私有 API 使用需复查"
+               label fn arity (or actual 'unavailable))
+       :warning))))
 
 (defun clw/set-fill-column (n)
   "Return a hook function that buffer-locally sets `fill-column' to N."
@@ -1784,6 +1797,9 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                       (message "[clw] 重试成功: %s" pkg))
                   (error
                    (message "[clw] 重试仍失败: %s (%S)" pkg err))))))
+          ;; custom.el 可能存有旧 vc 列表（load-theme 会把它回套进 live 值），
+          ;; 安装只认 init.el 快照
+          (setq package-vc-selected-packages clw/package-vc-truth)
           (condition-case err
               (package-vc-install-selected-packages)
             (error
@@ -1796,11 +1812,21 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                                   (nreverse failed-packages) ", "))
             (message "[clw] 所有包安装成功")))
       ;; `package-selected-packages' 会被 custom.el 在 load-theme 时覆盖，
-      ;; 这里同步成 init.el 的 clw/package-list 并写回 custom.el，保持两处一致。
+      ;; 这里同步成 init.el 的最终值（ELPA 列表 + package-vc 包名）并写回
+      ;; custom.el，保持两处一致；漏掉 vc 包名会让 package-autoremove 误删。
+      ;; 同理把 vc 列表本身也持久化为 init 真值：package-vc.el:791 曾写入的
+      ;; 旧副本一旦被 custom.el 加载/主题套用回套，持久化后即与真值相等，
+      ;; 覆盖变为无害。
       ;; 用 condition-case 兜底：cleanup 里即使 custom-file 不可写也不能中断，
       ;; 否则后面的 quickstart 刷新和关闭代理都不会执行。
       (condition-case err
-          (customize-save-variable 'package-selected-packages clw/package-list)
+          (progn
+            (customize-save-variable
+             'package-selected-packages
+             (delete-dups (append clw/package-list
+                                  (mapcar #'car clw/package-vc-truth))))
+            (customize-save-variable 'package-vc-selected-packages
+                                     clw/package-vc-truth))
         (error (message "[clw] 同步 package-selected-packages 失败：%s"
                         (error-message-string err))))
       ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
@@ -1872,6 +1898,19 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                       :files ("*.el" "bin"))
           )
         )
+;; 快照 init.el 真值：package-vc.el:791 一旦把 vc 列表写进 custom.el，
+;; load-theme 会经 user theme 把 custom.el 里的旧拷贝重新套用到 live 值。
+(defvar clw/package-vc-truth nil
+  "init.el 定义的 `package-vc-selected-packages' 权威值，防 custom.el 旧值回套。")
+(setq clw/package-vc-truth package-vc-selected-packages)
+;; `package-autoremove'（内部 `package--removable-packages'）只保护
+;; `package-selected-packages' 及其传递依赖；vc 检出位于 package-user-dir 内、
+;; 且 project-x 这类元包没有下游依赖者，不并入就会被误删。上面按
+;; clw/package-list 单独 setopt 的是合并前值，这里作为最终值覆盖。
+(setopt package-selected-packages
+        (delete-dups
+         (append clw/package-list
+                 (mapcar #'car clw/package-vc-truth))))
 
 ;; 包自动安装移到 startup 末尾：此时 after-init-time 已设置，
 ;; install/refresh 内部的 package-initialize 不会再触发
@@ -1880,6 +1919,16 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
           (lambda ()
             (when (clw/package-missing-p)
               (clw/install-packages))))
+;; 无条件 startup 末尾重设：doom-themes :init 的 load-theme 在合并 setopt 之后
+;; 运行，会把 custom.el 持久化的旧值经 user theme 回套进这两个变量；
+;; 包不缺失时 install-packages（及其 cleanup 持久化）不执行，仅靠这里兜底。
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq package-vc-selected-packages clw/package-vc-truth)
+            (setopt package-selected-packages
+                    (delete-dups
+                     (append clw/package-list
+                             (mapcar #'car clw/package-vc-truth))))))
 ;;@@ theme
 ;; 保持 doom-oksolar-light。曾试 modus-operandi-tinted：入口文件虽只 92 行，
 ;; 但会 require-theme 'modus-themes 并生成 2371 个 face（约为 doom 的 2 倍），
