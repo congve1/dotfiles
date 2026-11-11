@@ -175,6 +175,12 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。
 (setopt scroll-conservatively 10000)
 ;; C-M-v (scroll-other-window) 默认滚最近最少用的窗口，翻参考资料更顺手
 (setopt other-window-scroll-default #'get-lru-window)
+;; 只读文件自动进入 view-mode：用 pager 键浏览，q 退出（karthinks batteries）
+(setopt view-read-only t)
+;; M-u/M-l/M-c 改为 dwim：有选区作用于选区，否则作用于单词
+(keymap-global-set "<remap> <upcase-word>" #'upcase-dwim)
+(keymap-global-set "<remap> <downcase-word>" #'downcase-dwim)
+(keymap-global-set "<remap> <capitalize-word>" #'capitalize-dwim)
 ;; 光标在行尾时保持在行尾，行尾追加内容不跳列
 (setopt track-eol t)
 ;;@@ 添加一些全局绑定
@@ -3184,10 +3190,12 @@ This differs from Avy's goto-char-timer in how it processes parens."
   (with-eval-after-load 'magit
     (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
   ;; feature 分支开发时，fringe 标记默认对照 HEAD 看不出全貌；把基准换成
-  ;; master 等目标分支更实用。r=全局基准 R=按项目 u=重置（C-x v 前缀下）
+  ;; master 等目标分支更实用。r=全局基准 R=按项目 u=重置 U=按项目重置
+  ;; （上游新版已内置项目级命令，原文 2024 建议的方案如今开箱即得）
   (keymap-set diff-hl-command-map "r" #'diff-hl-set-reference-rev)
   (keymap-set diff-hl-command-map "R" #'diff-hl-set-reference-rev-in-project)
-  (keymap-set diff-hl-command-map "u" #'diff-hl-reset-reference-rev))
+  (keymap-set diff-hl-command-map "u" #'diff-hl-reset-reference-rev)
+  (keymap-set diff-hl-command-map "U" #'diff-hl-reset-reference-rev-in-project))
 ;;@@ magit
 (use-package magit
   :bind ("C-x g" . magit-status)
