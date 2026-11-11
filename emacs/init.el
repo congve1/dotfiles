@@ -2474,9 +2474,9 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   (setopt corfu-auto-prefix 2)
   ;; 无候选项不显示 no match
   (setopt corfu-quit-no-match t)
-  ;; 输入空格等边界字符时不要退出补全，配合 fussy/fzf 多词过滤
-  ;; （默认 'separator 时普通空格会关掉弹窗，只能靠 M-SPC 插入分隔符）
-  (setopt corfu-quit-at-boundary nil)
+  ;; 输入空格等边界字符时退出补全：符号里不会有空格，空格即结束；
+  ;; 代价是失去 fussy/fzf 的空格多词过滤
+  (setopt corfu-quit-at-boundary t)
   (add-hook 'prog-mode-hook #'corfu-mode)
   (defun clw/corfu-enable-always-in-minibuffer ()
     "Enable Corfu in the minibuffer if Vertico is not active."
@@ -3523,13 +3523,105 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   ;; `slime-fuzzy-default-completion-ui' t 让 fuzzy 返回 capf 格式交给
   ;; corfu/fussy，而不是 SLIME 自建的 *Completions* 界面。
   (setq slime-fuzzy-default-completion-ui t)
-  ;; 限制 fuzzy 的计算规模，缩短同步阻塞窗口：C-g 打断后 SBCL 仍会跑完并
-  ;; 返回迟到回复，窗口越小越不容易触发 "Reply to canceled synchronous eval"
+  ;; 限制 fuzzy 的计算规模：手动 `slime-fuzzy-complete-symbol'（M-TAB 等）仍走
+  ;; 同步 RPC，预算小则该窗口短；自动补全路径已改用下方本地缓存，与此无关。
   (setq slime-fuzzy-completion-time-limit-in-msec 600)
   (setq slime-fuzzy-completion-limit 200)
+  ;; ===== 符号补全本地缓存：capf 零同步 RPC =====
+  ;; `slime-fuzzy-complete-symbol' 每次触发都同步调用 `swank:fuzzy-completions'
+  ;; （服务端预算最长 600ms 阻塞 Emacs）；corfu-auto 边打字边触发导致明显卡顿，
+  ;; 卡顿中按 C-g 会留下迟到回复，报 "Reply to canceled synchronous eval
+  ;; request"。这里改为：用 `slime-eval-async' 把当前包全部可见符号预取进
+  ;; buffer-local 缓存，capf 只读缓存、模糊匹配交给本地 fussy/fzf——补全路径
+  ;; 上 0 RPC、0 冻结。关键字(":")与字符名("#\\")补全需要上下文，返回 nil
+  ;; 让位 c-p-c（其 RPC 候选集小且快）；包/连接切换自动失效，超过 TTL 在下
+  ;; 一次补全时后台换血（继续用旧缓存，不等待）。
+  (defvar-local clw/slime-symbol-cache nil
+    "缓存 ((KEY . 时间戳) . 已格式候选)，KEY 为 (连接名 . 包名)。")
+  (defvar clw/slime-symbol-cache-ttl 60
+    "符号缓存保鲜期（秒）；过期后下一次补全触发后台刷新。")
+  (defun clw/slime--format-cached (triples)
+    "把 swank 三元组 (name kind symbol) 做成一次性的候选列表+注解 plist。
+不复制 c-p-c 的 `:company-docsig'——它内部是同步 `slime-eval'，corfu 不消费
+该键，留着只会在挂 company 时引入新的同步 RPC。"
+    (let ((cands (delq nil
+                       (mapcar
+                        (lambda (triple)
+                          ;; swank `format-completion-set' 产出的候选是
+                          ;; (name kind &optional sym-list)，kind 可能是
+                          ;; 字符串（包候选 "-------p-"）或缺省；宽松解构
+                          ;; 对齐 c-p-c 的 `cl-loop for (a b c) in' 语义
+                          (cl-destructuring-bind (&optional name kind sym)
+                              triple
+                            (when name
+                              (propertize name
+                                          'slime-kind (or kind "")
+                                          'slime-symbol sym))))
+                        triples))))
+      (list cands
+            :company-kind
+            (lambda (x)
+              (when-let* ((prop (get-text-property 0 'slime-kind x)))
+                (cl-loop for (char kind) in '((?g method) (?f function)
+                                              (?b variable) (?c class)
+                                              (?t class) (?p module))
+                         when (cl-find char prop) return kind)))
+            :annotation-function
+            (lambda (x)
+              (when-let* ((kind (get-text-property 0 'slime-kind x)))
+                (concat " " kind)))
+            :company-doc-buffer
+            (lambda (x)
+              (when-let* ((sym (get-text-property 0 'slime-symbol x)))
+                ;; `slime-eval-describe' 内部是异步 RPC，不阻塞
+                (slime-eval-describe `(swank:describe-symbol ,sym) nil)
+                (slime-buffer-name :description))))))
+  (defun clw/slime-symbol-cache-update ()
+    "异步预取当前包的全部可见符号进 buffer-local 缓存。"
+    (interactive)
+    (when (and (slime-connected-p) (not (minibufferp)))
+      (let ((pkg (slime-current-package))
+            (conn (slime-connection-name)))
+        (slime-eval-async `(swank:completions "" ',pkg)
+          (lambda (triples)
+            ;; slime-eval-async 的回包在本发起 buffer 里执行
+            (when (equal (cons conn pkg)
+                         (cons (slime-connection-name) (slime-current-package)))
+              (setq clw/slime-symbol-cache
+                    (cons (cons (cons conn pkg) (current-time))
+                          (clw/slime--format-cached triples)))))))))
+  (defun clw/slime-cached-fuzzy-capf ()
+    "基于本地缓存的模糊符号补全：不发任何同步 RPC。"
+    (when (and (slime-connected-p) (not (minibufferp)))
+      (let* ((end (slime-symbol-end-pos))
+             (beg (slime-symbol-start-pos))
+             (prefix (buffer-substring-no-properties beg end))
+             (key (cons (slime-connection-name) (slime-current-package))))
+        (cond
+         ;; CL 符号不含空格，但 `slime-beginning-of-symbol' 的正则把空白也算进
+         ;; "符号"，region 会跨过空格继续包住 point——capf 恒有效，corfu 的
+         ;; `corfu-quit-at-boundary' 便无从退出。前缀空或含空白一律返回 nil：
+         ;; 空格即终结弹窗（也免得空前缀把整包候选怼进弹窗）
+         ((or (string-empty-p prefix)
+              (string-match-p "[ \t]" prefix))
+          nil)
+         ((or (string-prefix-p ":" prefix)
+              (string-prefix-p "#\\" prefix))
+          nil)
+         ((and clw/slime-symbol-cache
+               (equal key (caar clw/slime-symbol-cache)))
+          (when (> (- (float-time) (float-time (cdar clw/slime-symbol-cache)))
+                   clw/slime-symbol-cache-ttl)
+            (clw/slime-symbol-cache-update))
+          (apply #'cl-list* beg end (cdr clw/slime-symbol-cache)))
+         (t
+          (clw/slime-symbol-cache-update)
+          nil)))))
+  ;; 连接建立即预热首个 REPL 的缓存，消掉“首次补全慢一拍”
+  (add-hook 'slime-connected-hook #'clw/slime-symbol-cache-update)
   (setq slime-completion-at-point-functions
         '(slime-filename-completion
-          slime-fuzzy-complete-symbol
+          clw/slime-cached-fuzzy-capf
           slime-c-p-c-completion-at-point
           slime-simple-completion-at-point))
   ;; 未连接 REPL 时 SLIME 的 capf 会抛 "Not connected."，而
@@ -3538,8 +3630,13 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   (clw/check-private-advice 'slime--completion-at-point '(0 . 0)
                             "slime--completion-at-point :around")
   (defun clw/slime-completion-at-point-safe (orig)
-    "未连接 REPL 时返回 nil，避免中断 `completion-at-point-functions' 链。"
-    (when (slime-connected-p)
+    "未连接 REPL 时返回 nil，避免中断 `completion-at-point-functions' 链；
+紧跟空格输入时也返回 nil——CL 符号不含空格，`slime-symbol-start-pos' 会把
+前一符号重新包成有效 region（point 恰在 region 末端），整条链照常返回候选，
+corfu 的 `corfu-quit-at-boundary' 便没有可退出的时机，弹窗在空格后关不掉。
+在这里统一掐断，c-p-c/simple 的每键小 RPC 也一并免掉。"
+    (when (and (slime-connected-p)
+               (not (eq (char-before) ?\s)))
       (funcall orig)))
   (advice-add 'slime--completion-at-point :around
               #'clw/slime-completion-at-point-safe))
