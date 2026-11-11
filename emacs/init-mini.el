@@ -32,15 +32,22 @@
 
 ;;; Code:
 
-;; Load path
-(push (expand-file-name "site-lisp" user-emacs-directory) load-path)
-(push (expand-file-name "lisp" user-emacs-directory) load-path)
-
 ;; Packages
-;; Without this comment Emacs25 adds (package-initialize) here
+;; 本文件用于 `emacs -q -l init-mini.el' 起最小环境排错。-q 不读
+;; early-init.el，package-user-dir 必须在这里显式指到与正式配置一致的
+;; 版本化目录（elpa-<major>），否则会落到早已不用的旧 elpa/ 目录，
+;; 调出来的包行为和真实环境完全不同。
+(setq package-user-dir
+      (expand-file-name (format "elpa-%s" emacs-major-version)
+                        user-emacs-directory))
+(setq package-enable-at-startup nil)
+(package-initialize)
+;; 与 init.el 的白名单保持一致；用 https，http 源在部分网络下会被重定向
+;; 或直接拒绝
 (setq package-archives
-      '(("gnu"   . "http://elpa.gnu.org/packages/")
-        ("melpa" . "http://melpa.org/packages/")))
+      '(("gnu"   . "https://elpa.gnu.org/packages/")
+        ("nongnu" . "https://elpa.nongnu.org/nongnu/")
+        ("melpa" . "https://melpa.org/packages/")))
 
 ;; Explicitly set the preferred coding systems to avoid annoying prompt
 ;; from emacs (especially on Microsoft Windows)

@@ -26,6 +26,17 @@
 ;; 在 init.el 的 emacs-startup-hook 中恢复（见 GC 配置部分）。
 (defvar clw/init-file-name-handler-alist file-name-handler-alist)
 (setq file-name-handler-alist nil)
+
+;; 启动期用大 GC 阈值：package-enable-at-startup 会在 init.el 之前加载
+;; quickstart（~370KB elc），默认阈值下实测触发 2 次 GC；提前在这里提升，
+;; 让 package-activate-all 与 init.el 都在大阈值下执行。init.el 的
+;; emacs-startup-hook 负责恢复。
+(defvar clw/normal-gc-cons-threshold (* 64 1024 1024)
+  "启动完成后恢复的 GC 阈值（64MB，兼顾 magit 等重分配场景）。")
+(defvar clw/startup-gc-cons-threshold (* 128 1024 1024)
+  "启动期间使用的 GC 阈值。")
+(setq gc-cons-threshold clw/startup-gc-cons-threshold)
+(setq gc-cons-percentage 0.5)
 ;; `use-package' is builtin since 29.
 ;; It must be set before loading `use-package'.
 (setq use-package-enable-imenu-support t)

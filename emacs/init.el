@@ -13,7 +13,7 @@
   (eq system-type 'gnu/linux)
   "Are we running on a GNU/Linux system?")
 
-(defun is-wsl-p ()
+(defun clw/is-wsl-p ()
   "Return non-nil if running in WSL."
   (and (eq system-type 'gnu/linux)
        (file-readable-p "/proc/version")
@@ -23,7 +23,7 @@
          ;; 不区分大小写匹配 "microsoft" 或 "WSL"
          (string-match-p "\\(microsoft\\|WSL\\)" version))))
 ;;@ 缓存 WSL 检测结果，避免每次读 /proc/version
-(defconst sys/wslp (is-wsl-p) "Are we running in WSL?")
+(defconst sys/wslp (clw/is-wsl-p) "Are we running in WSL?")
 ;;@ 辅助函数
 (defun clw/load-theme (theme)
   "Disable others and enable NEW theme"
@@ -35,16 +35,21 @@
 ;; 数量不对）。在挂 advice 之前核对函数存在性与参数个数，变了就显式告警，
 ;; 而不是等某天 magit / p-search 莫名坏掉才发现。
 (defun clw/check-private-advice (fn arity label)
-  "检查 FN 是否存在且参数个数为 ARITY，不符时警告 LABEL 对应的 advice。
+  "检查私有函数 FN 是否存在且参数个数为 ARITY，不符时警告 LABEL 对应的使用点。
+该检查既用于 advice 目标，也用于直接调用的私有 API。
 ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
   (unless (and (fboundp fn)
                (equal (condition-case nil (func-arity fn) (error nil)) arity))
     (display-warning
      'clw
-     (format "%s：%S 签名变化（期望 %S，实际 %S），对应 advice 需复查"
+     (format "%s：%S 签名变化（期望 %S，实际 %S），相关私有 API 使用需复查"
              label fn arity
              (condition-case nil (func-arity fn) (error 'void-function)))
      :warning)))
+
+(defun clw/set-fill-column (n)
+  "Return a hook function that buffer-locally sets `fill-column' to N."
+  (lambda () (setq-local fill-column n)))
 ;;@ 基础配置
 ;;@@ custom配置
 (setq custom-file (expand-file-name "custom.el" user-emacs-directory))
@@ -55,23 +60,20 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
 ;; custom-file 必须加载，否则 Customize UI 保存的设置重启后会静默丢失
 (load custom-file :noerror :nomessage)
 ;;@@ 调整gc
-;; 启动期间使用大阈值避免 GC 拖慢加载，启动完成后恢复为中等阈值；
+;; 启动期的大阈值已在 early-init.el 设置（覆盖 package-activate-all 与
+;; init.el 加载），这里只负责启动完成后恢复为中等阈值；
 ;; 64MB 避免 magit 刷新等重分配场景频繁触发 GC（magit 官方 wiki 建议值）。
 ;; 参考: https://github.com/purcell/emacs.d/blob/master/init.el#L27
-(let ((normal-gc-cons-threshold (* 64 1024 1024))
-      (init-gc-cons-threshold (* 128 1024 1024)))
-  (setq gc-cons-threshold init-gc-cons-threshold)
-  (setq gc-cons-percentage 0.5)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              ;; 启动时立刻 GC 会阻塞首屏（实测 ~15ms），推迟到空闲；
-              ;; 期间若自然触发 GC 也无害
-              (run-with-idle-timer 1 nil #'garbage-collect)
-              (setq gc-cons-threshold normal-gc-cons-threshold)
-              (setq gc-cons-percentage 0.1)
-              (when (boundp 'clw/init-file-name-handler-alist)
-                (setq file-name-handler-alist
-                      clw/init-file-name-handler-alist)))))
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            ;; 启动时立刻 GC 会阻塞首屏（实测 ~15ms），推迟到空闲；
+            ;; 期间若自然触发 GC 也无害
+            (run-with-idle-timer 1 nil #'garbage-collect)
+            (setq gc-cons-threshold clw/normal-gc-cons-threshold)
+            (setq gc-cons-percentage 0.1)
+            (when (boundp 'clw/init-file-name-handler-alist)
+              (setq file-name-handler-alist
+                    clw/init-file-name-handler-alist))))
 ;;@@ emacs 版本必须大于等于 31.1
 (when (version< emacs-version "31.1")
   (error "init.el: emacs version must >= 31.1"))
@@ -109,6 +111,8 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。"
 (setopt initial-scratch-message (format ";;Emacs %s" emacs-version))
 ;; Emacs 32 master 中 display-startup-echo-area-message 移至 C 层 subr，
 ;; inhibit-startup-echo-area-message 变量已失效；用 advice 覆盖让其静默。
+(clw/check-private-advice 'display-startup-echo-area-message '(0 . 0)
+                          "display-startup-echo-area-message :override")
 (advice-add 'display-startup-echo-area-message :override #'ignore)
 ;;@@ 关闭 C-g, 边界移动命令响铃
 (setopt ring-bell-function 'ignore)
@@ -327,29 +331,35 @@ remote 查找不缓存；buffer-local `exec-path'（envrc、python venv 等
 If not in WSL, return FALLBACK (default '127.0.0.1').
 If in WSL, try to get gateway via system commands."
   (let ((fallback (or fallback "127.0.0.1")))
-    ;; 非 WSL 环境：直接返回 fallback
-    (if (not sys/wslp)
-        fallback
-      ;; WSL 环境：尝试获取网关
-      (let ((gw nil))
-        ;; 方法 1: 使用 ip route
-        (when (and (null gw) (executable-find "ip"))
-          (let ((output (shell-command-to-string "ip route show default 2>/dev/null")))
-            (when (and (stringp output)
-                       (string-match "via \\([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\)" output))
-              (setq gw (match-string 1 output)))))
-        
-        ;; 方法 2: 使用 netstat
-        (when (and (null gw) (executable-find "netstat"))
-          (let ((output (shell-command-to-string "netstat -rn 2>/dev/null")))
-            (dolist (line (split-string output "\n"))
-              (when (and (string-match "^0\\.0\\.0\\.0" line)
-                         (string-match "\\([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\)$" line))
-                (setq gw (match-string 1 line))
-                (return)))))
-        
-        ;; 返回网关或默认值
-        (or gw fallback)))))
+    (if sys/wslp
+        ;; WSL 环境：尝试获取网关
+        (let ((gw nil))
+          ;; 方法 1: 使用 ip route
+          (when (and (null gw) (executable-find "ip"))
+            (let ((output (shell-command-to-string "ip route show default 2>/dev/null")))
+              (when (and (stringp output)
+                         (string-match "via \\([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\)" output))
+                (setq gw (match-string 1 output)))))
+
+          ;; 方法 2: 使用 netstat
+          (when (and (null gw) (executable-find "netstat"))
+            ;; 用 cl-loop 而非 dolist+return：init.el 带 no-byte-compile，
+            ;; 解释执行下内建 dolist 不建匿名块，(return)/(cl-return) 都报错；
+            ;; cl-loop 的 return 自己建块，解释/编译两种环境行为一致
+            (setq gw
+                  (cl-loop for line in (split-string
+                                        (shell-command-to-string
+                                         "netstat -rn 2>/dev/null")
+                                        "\n")
+                           when (and (string-match "^0\\.0\\.0\\.0" line)
+                                     (string-match
+                                      "\\([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\)$"
+                                      line))
+                           return (match-string 1 line))))
+
+          ;; 返回网关或默认值
+          (or gw fallback))
+      fallback)))
 
 (defcustom clw/proxy-port 7897
   "本地代理（如 clash）的监听端口，随本机代理软件配置调整。"
@@ -415,7 +425,7 @@ If in WSL, try to get gateway via system commands."
 ;;@@ 关闭 `indent-tabs-mode'
 (setopt indent-tabs-mode nil)
 ;;@@ 持久前置快捷键映射
-(defun repeated-prefix-help-command ()
+(defun clw/repeated-prefix-help-command ()
   "在前缀键后按 C-h：用 which-key 展示该前缀的按键绑定，且面板常驻。
 
 复制该前缀为一张临时键映射（`overriding-terminal-local-map'）并令 KEEP-PRED=t，
@@ -449,11 +459,14 @@ If in WSL, try to get gateway via system commands."
 ;;@@ 设置窗口整体透明度为 0.65
 ;; 当前 Windows 还未实现背景透明 [2025-09-15]
 (defun clw/toggle-alpha ()
+  "在透明（0.65）与不透明之间切换整帧。
+`alpha' 未设置时 `frame-parameter' 返回 nil，若只跟 1.0 比较会让第一次按键
+变成 no-op（nil→1.0 仍不透明），这里把 nil 也视为不透明状态。"
   (interactive)
-  (if (eql (frame-parameter nil 'alpha) 1.0)
-      (set-frame-parameter nil 'alpha 0.65)
-    (set-frame-parameter nil 'alpha 1.0)))
-(keymap-global-set "<f9>" 'clw/toggle-alpha)
+  (let ((a (frame-parameter nil 'alpha)))
+    (set-frame-parameter nil 'alpha
+                         (if (or (null a) (equal a 1.0)) 0.65 1.0))))
+(keymap-global-set "<f9>" #'clw/toggle-alpha)
 ;;@2 内置的 emacs 包
 ;;@@PACKAGE
 ;; 包源白名单。第三方包可能在 autoload 里擅自
@@ -492,8 +505,10 @@ If in WSL, try to get gateway via system commands."
 ;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
 ;; 不再 :pin "gnu"：:pin 在宏展开时会 require package（进而 require browse-url），
 ;; 导致启动日志出现 "Loading browse-url..."；diminish 在 GNU ELPA，
-;; package-archive-priorities 已把 gnu 排最高，无需显式 pin
-(use-package diminish :ensure t)
+;; package-archive-priorities 已把 gnu 排最高，无需显式 pin。
+;; 不加 :ensure：diminish 已在 clw/package-list，由 clw/install-packages 负责安装；
+;; :ensure t 会在 init 阶段（startup hook 之前）触发安装，网络异常时会阻塞启动。
+(use-package diminish)
 ;;@@DISPLAY-LINE-NUMBERS 显示行号
 (setopt line-number-display-limit
         (* 1024 1024))
@@ -502,11 +517,11 @@ If in WSL, try to get gateway via system commands."
 ;; width-start=t 进入 buffer 时按总行数预分配宽度；grow-only=t 只增不减
 (setopt display-line-numbers-width-start t)
 (setopt display-line-numbers-grow-only t)
-(add-hook 'prog-mode-hook 'display-line-numbers-mode)
+(add-hook 'prog-mode-hook #'display-line-numbers-mode)
 ;;@@HL-LINE-MODE 高亮当前行
-(add-hook 'prog-mode-hook 'hl-line-mode)
+(add-hook 'prog-mode-hook #'hl-line-mode)
 ;;@@ELEC-PAIR 括号匹配高亮
-(add-hook 'prog-mode-hook 'electric-pair-mode)
+(add-hook 'prog-mode-hook #'electric-pair-mode)
 ;;@@ ELEC_INDENT
 (use-package elec-pair
   :config
@@ -686,7 +701,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
     (and (not ibuffer-filter-groups) ;; not use group
          (assoc "default" ibuffer-saved-filter-groups)
          (ibuffer-switch-to-saved-filter-groups "default")))
-  (add-hook 'ibuffer-hook 'clw/ibuffer-use-default-group))
+  (add-hook 'ibuffer-hook #'clw/ibuffer-use-default-group))
 ;;@@AUTO-SAVE-VISITED-MODE 自动保存文件
 ;; Lazycat 写过一个叫 auto-save 的插件来在编辑文件后立刻保存
 ;; inlucde-yy在它的插件的基础上稍作改进过：
@@ -712,15 +727,19 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 ;;@@RECENTF 保留最近文件打开记录
 (use-package recentf
   :bind (("C-c r" . recentf-open))
+  ;; :bind 隐含 :defer，recentf-mode 若放 :config 要等首次 C-c r 才生效，
+  ;; 在那之前整个会话打开的文件都不进历史。挂 after-init 钩子让模式在启动后
+  ;; 立即启用（勿在 :config 里再调 recentf-mode：无参调用是 toggle，会再关掉）
+  :hook (after-init . recentf-mode)
   :init
   ;; 可在 `recentf-open-files' 中显示的最大文件数量
   (setopt recentf-max-menu-items 50)
-  ;; recentf 保存的文件数量
-  (setopt recentf-max-saved-items 2000)
-  ;; 不进行保存文件的自动清理（避免启动时对 2000 条逐个 stat，改手动/空闲清理）
+  ;; recentf 保存的文件数量。cleanup 会对每条做 file-exists-p，2000 条在
+  ;; /mnt/c 之类的慢路径上会卡；1000 条够用且清理成本减半
+  (setopt recentf-max-saved-items 1000)
+  ;; 不进行保存文件的自动清理（避免启动时对所有条目逐个 stat，改手动/空闲清理）
   (setopt recentf-auto-cleanup 'never)
   :config
-  (recentf-mode 1)
   ;; 启动时显示 recentf buffer
   ;;(setopt initial-buffer-choice 'recentf-open-files)
   ;; 每两小时保存一次最近文件列表
@@ -740,18 +759,22 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; :bind 隐含 :defer，故用 after-init 钩子触发加载并启用（勿在 :config 里
   ;; 再调一次 winner-mode：无参调用是 toggle，会把钩子刚打开的又关掉）
   :hook (after-init . winner-mode)
-  :config
-  ;; 给快捷键添加 repeat-mode 支持
+  :init
+  ;; repeat-map 不依赖 winner 加载，放 :init 更早建立
   (defvar clw/winner-repeat-map
     (let ((map (make-sparse-keymap)))
-      (define-key map (kbd "<up>") 'winner-undo)
-      (define-key map (kbd "<down>") 'winner-redo)
+      (keymap-set map "<up>" #'winner-undo)
+      (keymap-set map "<down>" #'winner-redo)
       map))
   (dolist (cmd '(winner-undo winner-redo))
     (put cmd 'repeat-map 'clw/winner-repeat-map))
   :bind (("C-x <up>" . winner-undo)
          ("C-x <down>" . winner-redo)))
 ;;@@ORG org-mode 基础配置
+;; 变量赋值统一用 setq 而非 :custom/setopt：org 是 deferred 包，:init 里库未加载，
+;; setq 与 setopt 效果相同但后者在库加载后会对复杂值做 defcustom 类型校验
+;; （实测 org-agenda-custom-commands 等严格类型变量会因嵌套值报 warning）。
+;; 新增变量请沿用 setq；只有 simple scalar 且确定类型匹配时才考虑 :custom。
 (use-package org
   :bind (("C-c l" . org-store-link)
          ("C-c a" . org-agenda)
@@ -854,7 +877,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; 创建目录（首次使用）
   (unless (file-exists-p org-directory) (make-directory org-directory t))
   ;; 插入零宽空格（原有功能）
-  (defun clw/insert-zws () (interactive) (insert "​"))
+  (defun clw/insert-zws () (interactive) (insert "\u200B"))
   ;; org-mode buffer 关闭 show-paren
   (defun clw/org-mode-setup ()
     (make-variable-buffer-local 'show-paren-mode)
@@ -969,10 +992,16 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
             (run-with-idle-timer 2 nil
                                  (lambda ()
                                    (require 'org-agenda)    ; 级联加载 org + babel 语言 + tempo
-                                   (dolist (f (org-agenda-files))
-                                     (when (and (stringp f) (file-exists-p f))
-                                       (with-current-buffer (find-file-noselect f)
-                                         (kill-buffer)))))))) ; 打开即关，触发 org-mode 模块加载链
+                                   ;; recentf-mode 在 after-init 已启用，预热里
+                                   ;; 打开又 kill 会先触发 add 再触发 remove，
+                                   ;; agenda 文件反而被从 recentf-list 删掉；
+                                   ;; 预热范围内中和 recentf 的两个变更点
+                                   (cl-letf (((symbol-function 'recentf-add-file) #'ignore)
+                                             ((symbol-function 'recentf-remove-if-non-kept) #'ignore))
+                                     (dolist (f (org-agenda-files))
+                                       (when (and (stringp f) (file-exists-p f))
+                                         (with-current-buffer (find-file-noselect f)
+                                           (kill-buffer))))))))) ; 打开即关，触发 org-mode 模块加载链
 
 ;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
 (use-package org-modern
@@ -1021,7 +1050,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 ;; 原先把 dabbrev-expand 重映射到 hippie-expand 做文本展开；其词补全已由
 ;; cape-dabbrev (C-c p d) / cape-file 覆盖，这里改走 `completion-at-point'，
 ;; 让 M-/ 触发 corfu 弹窗显示语义候选（LSP、SLIME、cape 等 capf 后端）。
-(define-key (current-global-map) [remap dabbrev-expand] #'completion-at-point)
+(keymap-global-set "<remap> <dabbrev-expand>" #'completion-at-point)
 ;;@@ TREESIT 基于语法树的 PL 前端工具
 (use-package treesit
   :when (treesit-available-p)
@@ -1057,24 +1086,30 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode)))
 
 ;;@@ PIXEL-SCROLL
-(when clw/use-pixel-scroll
+;; display-graphic-p 守卫：TTY（emacs -nw / SSH）没有可插值的像素滚动，
+;; 且下面会改写 scroll-up/down-command 的按键路径，终端环境直接跳过整块。
+(when (and clw/use-pixel-scroll (display-graphic-p))
   (use-package pixel-scroll
     :config
     (pixel-scroll-precision-mode 1)
     (setq pixel-scroll-precision-interpolate-page t)
     (defun clw/pixel-scroll-interpolate-down (&optional lines)
-      (interactive)
+      ;; 交互式读前缀：裸按时 lines=nil 走整页；C-u N 时 N 行精确插值
+      ;; （原 `(interactive)' 不读参数，前缀分支从按键路径不可达）
+      (interactive (list (and current-prefix-arg (prefix-numeric-value current-prefix-arg))))
       (if lines
           (pixel-scroll-precision-interpolate (* -1 lines (pixel-line-height)))
         (pixel-scroll-interpolate-down)))
     (defun clw/pixel-scroll-interpolate-up (&optional lines)
-      (interactive)
+      (interactive (list (and current-prefix-arg (prefix-numeric-value current-prefix-arg))))
       (if lines
-          (pixel-scroll-precision-interpolate (* lines (pixel-line-height))))
-      (pixel-scroll-interpolate-up))
-
-    (defalias 'scroll-up-command 'clw/pixel-scroll-interpolate-down)
-    (defalias 'scroll-down-command 'clw/pixel-scroll-interpolate-up)))
+          (pixel-scroll-precision-interpolate (* lines (pixel-line-height)))
+        (pixel-scroll-interpolate-up)))
+    ;; 用 <remap> 而非 defalias：只接管按键路径（C-v/M-v/space 等绑到
+    ;; scroll-up-command 的键），程序化调用（isearch 自动滚动、minibuffer
+    ;; 完成、next-error 定位）仍走原生命令，不被插值动画拖慢
+    (keymap-global-set "<remap> <scroll-up-command>" #'clw/pixel-scroll-interpolate-down)
+    (keymap-global-set "<remap> <scroll-down-command>" #'clw/pixel-scroll-interpolate-up)))
 ;;@@REPEAT-MODE 反复触发一组命令
 ;; 重复按键可以使用某个键反复触发，比如 C-x o o o ...
 ;; 可通过 `describe-repeat-maps' 来了解哪些命令可用
@@ -1091,7 +1126,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 
 ;;@@PROJECT 配置项目管理功能
 (use-package project
-  :bind ("C-x p C-b" . yy/project-list-buffers)
+  :bind ("C-x p C-b" . clw/project-list-buffers)
   :config
   ;; VC 检索/文件列表时忽略这些目录
   (setopt project-vc-ignores
@@ -1101,7 +1136,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
           '(".dir-locals.el" "Cargo.toml" "go.mod" "package.json"))
   ;; 使用 ibuffer 显示属于当前项目的文件
   ;; 可通过 `g' 键更新 ibuffer
-  (defun yy/project-list-buffers (&optional arg)
+  (defun clw/project-list-buffers (&optional arg)
     (interactive "P")
     (let* ((pr (project-current t))
            (root (expand-file-name (project-root pr)))
@@ -1227,8 +1262,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; 强制使用传统 REPL，避免 C-c C-c 中断行为异常
   (setenv "PYTHON_BASIC_REPL" "1")
   ;; 填充列与 Black/Ruff 默认值一致
-  (add-hook 'python-base-mode-hook
-            (lambda () (setq-local fill-column 88)))
+  (add-hook 'python-base-mode-hook (clw/set-fill-column 88))
   ;;@@ 自动检测 uv 项目的 .venv，让 REPL/LSP/formatter 都用项目虚拟环境
   ;; uv venv 默认在项目根创建 .venv；检测到就让 `run-python'、apheleia 的
   ;; ruff/black、eglot 的 pyright/pylsp 都对齐到项目 venv 的解释器与工具链。
@@ -1261,9 +1295,12 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   :defer t
   ;; 用 setq 而非 :custom：rust-ts-indent-offset 带 custom-autoload，
   ;; :custom 会在启动时把 rust-ts-mode.el 加载进来
-  :init (setq rust-ts-indent-offset 4)
+  :init
+  (setq rust-ts-indent-offset 4)
   ;; 填充列与 rustfmt 默认值一致
-  :hook (rust-ts-mode . (lambda () (setq-local fill-column 100))))
+  ;; 用 add-hook 而非 :hook：:hook 的 cdr 只接受 symbol/lambda，
+  ;; 放不下 (clw/set-fill-column 100) 这种调用
+  (add-hook 'rust-ts-mode-hook (clw/set-fill-column 100)))
 
 ;;@@GO Go 开发环境
 (use-package go-ts-mode
@@ -1277,12 +1314,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; 文件内容仍是 tab，仅视觉宽度 4，不影响 gofmt 合规性。
   (add-hook 'go-ts-mode-hook
             (lambda ()
-              (setq-local indent-tabs-mode t)
-              (setq-local tab-width 4)
-              (setq-local go-ts-mode-indent-offset 4)))
-  ;; 填充列（go 注释行宽与 lll linter 习惯用 100）
-  (add-hook 'go-ts-mode-hook
-            (lambda () (setq-local fill-column 100)))
+              (setq-local indent-tabs-mode t
+                          tab-width 4
+                          go-ts-mode-indent-offset 4
+                          ;; go 注释行宽与 lll linter 习惯用 100
+                          fill-column 100)))
   ;;@@ 常用 Go 工具清单及一键/自动安装
   ;; gopls=LSP, goimports=格式化+import整理, golangci-lint=静态检查(v2),
   ;; dlv=调试, gofumpt=更严格格式化, gomodifytags/impl/gotests=代码生成
@@ -1326,6 +1362,10 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
              :command (list "bash" "-c" cmd)
              :sentinel (lambda (proc event)
                          (when (string-match-p "finished" event)
+                           ;; 安装期间这些命令名可能已被查过并缓存为 nil
+                           ;; （executable-find 缓存），不清掉的话 gopls 等
+                           ;; 装好了也继续被当成不存在
+                           (clw/executable-find-clear-cache)
                            (message "Go 工具安装完成")
                            (with-current-buffer (process-buffer proc)
                              (goto-char (point-max))
@@ -1362,8 +1402,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (js-indent-level 2)
   :config
   ;; 填充列与 prettier 默认值一致
-  (add-hook 'js-base-mode-hook
-            (lambda () (setq-local fill-column 80))))
+  (add-hook 'js-base-mode-hook (clw/set-fill-column 80)))
 
 ;;@@TYPESCRIPT TypeScript 开发环境
 (use-package typescript-ts-mode
@@ -1373,8 +1412,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (typescript-ts-indent-offset 2)
   :config
   ;; 填充列与 prettier 默认值一致
-  (add-hook 'typescript-ts-base-mode-hook
-            (lambda () (setq-local fill-column 80))))
+  (add-hook 'typescript-ts-base-mode-hook (clw/set-fill-column 80)))
 
 ;;@@ISPELL, 30 里面的某些设置
 (setopt text-mode-ispell-word-completion nil)
@@ -1389,6 +1427,11 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 ;;@@WHICH-KEY 显示某个按键绑定的 keymap 中的命令
 (use-package which-key
   :diminish which-key-mode
+  ;; which-key.el 约 120KB，原先无 defer 关键字 = 启动期完整加载。
+  ;; 改 after-init 钩子启用：setopt 目标变量都没有 autoload cookie（已核实，
+  ;; 不会在启动期触发加载），which-key-mode 自带 autoload，首个前缀键前已就绪。
+  ;; 勿在 :config 里再调 which-key-mode：无参调用是 toggle，会把钩子刚开的关掉
+  :hook (after-init . which-key-mode)
   :init
   ;; 通过 C-h 或 ? 立即显示 which-key buffer（不必等 idle）
   (setopt which-key-show-early-on-C-h t)
@@ -1405,9 +1448,16 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   ;; 命令描述最长 35 字符，避免弹窗过宽
   (setopt which-key-max-description-length 35)
   :config
-  ;; 启动全局 which-key-mode
-  (which-key-mode)
-  (setq prefix-help-command #'repeated-prefix-help-command)
+  ;; 依赖 which-key 三个内部符号，上游重构即 void-function；与
+  ;; `clw/check-private-advice' 同一契约：缺失则告警并放弃安装（保持默认
+  ;; prefix-help-command），而不是等按前缀 C-h 时当场报错
+  (if (and (fboundp 'which-key--create-buffer-and-show)
+           (fboundp 'which-key--hide-popup)
+           (boundp 'which-key-persistent-popup))
+      (setq prefix-help-command #'clw/repeated-prefix-help-command)
+    (display-warning
+     'clw "which-key 内部 API 变化：which-key--create-buffer-and-show / --hide-popup / which-key-persistent-popup 缺失，前缀 C-h 面板保持默认行为"
+     :warning))
   ;; 匿名前缀组起名（源码 1927 行：无名 keymap 一律显示 "prefix"，看不出用途）
   (which-key-add-key-based-replacements
     "C-x 4"   "other window"
@@ -1474,7 +1524,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
                               expanded)))))))))
 
 (with-eval-after-load 'dired
-  (define-key dired-mode-map [remap dired-do-open] #'clw/open-in-external-app))
+  (keymap-set dired-mode-map "<remap> <dired-do-open>" #'clw/open-in-external-app))
 ;;@@DIRED-HIST dired 目录历史 l/r 前进后退（对齐 help/info/eww 惯例）
 ;; 接管 dired 原有的 l (dired-do-redisplay) 与 r (wdired) 两键
 (use-package dired-hist
@@ -1577,12 +1627,11 @@ Lisp function does not specify a special indentation."
          ((and (elt state 2)
                (or (not (looking-at "\\sw\\|\\s_"))
                    (looking-at ":")))
-          (if (not (> (save-excursion (forward-line 1) (point))
-                      calculate-lisp-indent-last-sexp))
-              (progn (goto-char calculate-lisp-indent-last-sexp)
-                     (beginning-of-line)
-                     (parse-partial-sexp (point)
-                                         calculate-lisp-indent-last-sexp 0 t)))
+          (unless (> (save-excursion (forward-line 1) (point))
+                     calculate-lisp-indent-last-sexp)
+            (goto-char calculate-lisp-indent-last-sexp)
+            (beginning-of-line)
+            (parse-partial-sexp (point) calculate-lisp-indent-last-sexp 0 t))
           ;; Indent under the list or under the first sexp on the same
           ;; line as calculate-lisp-indent-last-sexp.  Note that first
           ;; thing on that line has to be complete sexp since we are
@@ -1623,9 +1672,9 @@ Lisp function does not specify a special indentation."
 (use-package display-fill-column-indicator
   :custom (display-fill-column-indicator-character ?\s)
   :hook (prog-mode . display-fill-column-indicator-mode)
-  :hook ((emacs-startup text-scale-mode) . adjust-fill-column-indicator-stipple)
+  :hook ((emacs-startup text-scale-mode) . clw/adjust-fill-column-indicator-stipple)
   :config
-  (defun adjust-fill-column-indicator-stipple ()
+  (defun clw/adjust-fill-column-indicator-stipple ()
     "Adjust the fill-column-indicator face with stipple."
     (let* ((w (window-font-width))
            (stipple `(,w 1 ,(apply #'unibyte-string
@@ -2003,6 +2052,8 @@ HEAD 的路径也一并缓存：每次 redisplay 只 stat 一个文件，不再�
                                  (funcall seg nn-mode-line--info 'nn-mode-line-info :note))
                            " "))))
       (force-mode-line-update))
+    (clw/check-private-advice 'flymake--handle-report '(3 . many)
+                              "nn-mode-line: flymake--handle-report :after")
     (advice-add 'flymake--handle-report :after #'nn-mode-line--flymake-refresh)
     (add-hook 'flymake-mode-hook #'nn-mode-line--flymake-refresh))
 
@@ -2274,18 +2325,26 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   :bind (("C-x m" . ghostel)               ; 打开终端（compose-mail 未使用，安全接管）
          :map ghostel-semi-char-mode-map
          ("C-s" . consult-line)            ; 终端内复用 consult 搜索
-         ("M-p" . (lambda () (interactive) (ghostel-send-key "p" "ctrl"))) ; eshell 式上一条
-         ("M-n" . (lambda () (interactive) (ghostel-send-key "n" "ctrl"))) ; eshell 式下一条
+         ("M-p" . clw/ghostel-send-prev)   ; eshell 式上一条
+         ("M-n" . clw/ghostel-send-next)   ; eshell 式下一条
          :map project-prefix-map
          ("m" . ghostel-project)           ; C-x p m 当前项目开终端
          ("M" . ghostel-project-list-buffers))
   :config
+  (defun clw/ghostel-send-prev ()
+    "eshell 式上一条：发送 C-p 给终端。"
+    (interactive)
+    (ghostel-send-key "p" "ctrl"))
+  (defun clw/ghostel-send-next ()
+    "eshell 式下一条：发送 C-n 给终端。"
+    (interactive)
+    (ghostel-send-key "n" "ctrl"))
   (defun clw/ghostel-send-C-k-and-kill ()
     "Emacs 式 C-k：行尾内容进 kill-ring，同时发送 C-k 给终端。"
     (interactive)
     (kill-ring-save (point) (line-end-position))
     (ghostel-send-key "k" "ctrl"))
-  (define-key ghostel-semi-char-mode-map (kbd "C-k") #'clw/ghostel-send-C-k-and-kill)
+  (keymap-set ghostel-semi-char-mode-map "C-k" #'clw/ghostel-send-C-k-and-kill)
   ;; shell 里 ghostel_cmd 可调回 Emacs 执行命令（需在 bashrc 判 INSIDE_EMACS）
   (add-to-list 'ghostel-eval-cmds '("magit-status-setup-buffer" magit-status-setup-buffer))
   (add-to-list 'project-switch-commands '(ghostel-project "Ghostel") t)
@@ -2315,7 +2374,8 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   (add-hook 'rfn-eshadow-update-overlay-hook #'vertico-directory-tidy))
 ;;@@ marginalia
 (use-package marginalia
-  :init (marginalia-mode))
+  ;; after-init 再启用，让首帧先渲染；marginalia-mode 是全局 minor mode
+  :hook (after-init . marginalia-mode))
 ;;@@CORFU 试试更加轻量和现代的 corfu
 (use-package corfu
   :defer t
@@ -2328,19 +2388,18 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   ;; 该变量不控制 Corfu 弹窗
   (setopt completion-cycle-threshold 3)
   ;; 在输入字符 0.3 秒后触发 corfu
-  (setopt corfu-auto-delay 0.3)
+  (setopt corfu-auto-delay 0.5)
   ;; 自动触发所需的最小前缀长度，默认 3。调小到 2 让弹窗更早打开：
   ;; LSP 候选池是 server 按当前前缀过滤后返回的，前缀越短池越宽，
-  ;; 之后再用空格加词做 orderless 多词过滤才有东西可滤
+  ;; 之后再用空格加词做 fussy/fzf 多词过滤才有东西可滤
   (setopt corfu-auto-prefix 2)
   ;; 无候选项不显示 no match
   (setopt corfu-quit-no-match t)
-  ;; 输入空格等边界字符时不要退出补全，配合 orderless 多词过滤
+  ;; 输入空格等边界字符时不要退出补全，配合 fussy/fzf 多词过滤
   ;; （默认 'separator 时普通空格会关掉弹窗，只能靠 M-SPC 插入分隔符）
   (setopt corfu-quit-at-boundary nil)
-  (add-hook 'prog-mode-hook
-            (lambda () (corfu-mode)))
-  (defun corfu-enable-always-in-minibuffer ()
+  (add-hook 'prog-mode-hook #'corfu-mode)
+  (defun clw/corfu-enable-always-in-minibuffer ()
     "Enable Corfu in the minibuffer if Vertico is not active."
     (unless (or (bound-and-true-p vertico--input)
                 ;; read-passwd.el 未加载时 read-passwd-map 是 void，
@@ -2350,11 +2409,13 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
       (setq-local corfu-echo-delay nil ;; Disable automatic echo and popup
                   corfu-popupinfo-delay nil)
       (corfu-mode 1)))
-  (add-hook 'minibuffer-setup-hook #'corfu-enable-always-in-minibuffer 1)
-  (add-hook 'eshell-mode-hook
-            (lambda ()
-              (setq-local corfu-auto nil)
-              (corfu-mode)))
+  (add-hook 'minibuffer-setup-hook #'clw/corfu-enable-always-in-minibuffer 1)
+  ;; eshell / slime-repl 都用手动补全：关闭自动弹窗，只保留 corfu-mode
+  (defun clw/corfu-manual ()
+    "关闭 corfu 自动弹窗，仅保留手动触发（M-/）。"
+    (setq-local corfu-auto nil)
+    (corfu-mode 1))
+  (add-hook 'eshell-mode-hook #'clw/corfu-manual)
   ;; SLIME REPL 的 major-mode 是 slime-repl-mode（手写、非 prog-mode 派生），
   ;; 不会触发上面的 prog-mode-hook，需单独启用。它内部已由 slime-setup-completion
   ;; 把 slime--completion-at-point 注册进 buffer-local capf，corfu 一开就有
@@ -2362,12 +2423,9 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   ;; 改用手动 M-/（已 remap 成 completion-at-point）才弹；
   ;; 注意这里 TAB 不会触发补全：slime-repl-mode-map 未绑 TAB，且全局
   ;; tab-always-indent 保持默认 t（只缩进），配置里那行 'complete 是注释掉的。
-  (add-hook 'slime-repl-mode-hook
-            (lambda ()
-              (setq-local corfu-auto nil)
-              (corfu-mode 1)))
+  (add-hook 'slime-repl-mode-hook #'clw/corfu-manual)
   :config
-  ;; 把 buffer 内的补全候选转交 minibuffer（consult/vertico/orderless）。
+  ;; 把 buffer 内的补全候选转交 minibuffer（consult/vertico/fussy）。
   ;; 不绑定按键，按 M-x clw/corfu-move-to-minibuffer 调用。
   ;; 注意 completion-in-region--data 是内部变量，Emacs 升级可能改名。
   (defun clw/corfu-move-to-minibuffer ()
@@ -2424,32 +2482,32 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   (setq avy-dispatch-alist '((?m . avy-action-mark)
                              (?$ . avy-action-ispell)
                              (?z . avy-action-zap-to-char)
-                             (?  . avy-action-embark)
+                             (?  . clw/avy-action-embark)
                              (23 . avy-action-zap-to-char)
-                             (67108896 . avy-action-mark-to-char)
-                             (?h . avy-action-helpful)
-                             (?x . avy-action-exchange)
+                             (67108896 . clw/avy-action-mark-to-char)
+                             (?h . clw/avy-action-helpful)
+                             (?x . clw/avy-action-exchange)
 
-                             (11 . avy-action-kill-line)
-                             (25 . avy-action-yank-line)
+                             (11 . clw/avy-action-kill-line)
+                             (25 . clw/avy-action-yank-line)
 
                              (?w . avy-action-copy)
                              (?k . avy-action-kill-stay)
                              (?y . avy-action-yank)
                              (?t . avy-action-teleport)
 
-                             (?W . avy-action-copy-whole-line)
-                             (?K . avy-action-kill-whole-line)
-                             (?Y . avy-action-yank-whole-line)
-                             (?T . avy-action-teleport-whole-line)
+                             (?W . clw/avy-action-copy-whole-line)
+                             (?K . clw/avy-action-kill-whole-line)
+                             (?Y . clw/avy-action-yank-whole-line)
+                             (?T . clw/avy-action-teleport-whole-line)
                              ))
 
-  (defun avy-action-exchange (pt)
+  (defun clw/avy-action-exchange (pt)
     "Exchange sexp at PT with the one at point."
     (set-mark pt)
     (transpose-sexps 0))
 
-  (defun avy-action-helpful (pt)
+  (defun clw/avy-action-helpful (pt)
     (save-excursion
       (goto-char pt)
       (call-interactively #'display-local-help))
@@ -2457,7 +2515,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
      (cdr (ring-ref avy-ring 0)))
     t)
 
-  (defun avy-action-embark (pt)
+  (defun clw/avy-action-embark (pt)
     (unwind-protect
         (save-excursion
           (goto-char pt)
@@ -2466,7 +2524,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
        (cdr (ring-ref avy-ring 0))))
     t)
 
-  (defun avy-action-kill-line (pt)
+  (defun clw/avy-action-kill-line (pt)
     (unwind-protect
         (save-excursion
           (goto-char pt)
@@ -2478,7 +2536,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
 
   ;; dispatch 里 C-y 绑定的动作；avy 自身只提供 avy-action-yank（按 sexp），
   ;; 不提供按行的版本，缺了会在按 C-y 时报 void-function
-  (defun avy-action-yank-line (pt)
+  (defun clw/avy-action-yank-line (pt)
     "复制 PT 所在行（含换行）并 yank 到当前 point。"
     (save-excursion
       (goto-char pt)
@@ -2487,7 +2545,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
     (yank)
     t)
 
-  (defun avy-action-copy-whole-line (pt)
+  (defun clw/avy-action-copy-whole-line (pt)
     (save-excursion
       (goto-char pt)
       (cl-destructuring-bind (start . end)
@@ -2498,7 +2556,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
       (ring-ref avy-ring 0)))
     t)
 
-  (defun avy-action-kill-whole-line (pt)
+  (defun clw/avy-action-kill-whole-line (pt)
     (unwind-protect
         (save-excursion
           (goto-char pt)
@@ -2509,21 +2567,22 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
       (ring-ref avy-ring 0)))
     t)
 
-  (defun avy-action-yank-whole-line (pt)
-    (avy-action-copy-whole-line pt)
+  (defun clw/avy-action-yank-whole-line (pt)
+    (clw/avy-action-copy-whole-line pt)
     (save-excursion (yank))
     t)
 
-  (defun avy-action-teleport-whole-line (pt)
-    (avy-action-kill-whole-line pt)
+  (defun clw/avy-action-teleport-whole-line (pt)
+    (clw/avy-action-kill-whole-line pt)
     (save-excursion (yank)) t)
 
-  (defun avy-action-mark-to-char (pt)
+  (defun clw/avy-action-mark-to-char (pt)
     (activate-mark)
     (goto-char pt))
 
-  (defun clw/avy-goto-char-this-window (&optional arg)
-    "Goto char in this window with hints."
+  (defun clw/avy-goto-word-frame (&optional arg)
+    "按词首字母在整个 frame 的所有窗口内跳转（avy-goto-word-1）。
+数字/`C-u' 前缀时切到单字符快速模式（转成 `avy-goto-word-1' 的 4 前缀）。"
     (interactive "P")
     (let ((avy-all-windows t)
           (current-prefix-arg (if arg 4)))
@@ -2537,11 +2596,17 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
       (call-interactively 'avy-isearch)))
 
   (defun clw/avy-copy-line-no-prompt (arg)
+    "复制目标行，删除行首到第一个空格（含）及其后一个字符；无空格则整行保留。
+（原实现 `zap-to-char' 在行内无空格时报搜索失败；这里用 search-forward
+复刻同样的删除范围，行内无空格/空格在行尾时静默跳过。）"
     (interactive "p")
     (avy-copy-line arg)
     (beginning-of-line)
-    (zap-to-char 1 32)
-    (delete-forward-char 1)
+    (let ((start (point)))
+      (when (search-forward " " (line-end-position) t)
+        (delete-region start (point))
+        (unless (eolp)
+          (delete-forward-char 1))))
     (move-end-of-line 1))
 
   (custom-set-faces
@@ -2578,6 +2643,9 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
                  (string-replace ";" "\\(?:;\\|:\\)")
                  (string-replace "'" "\\(?:'\\|\"\\)")))
 
+  ;; avy--read-candidates 是 avy 私有 API，升级改名/改签名时提前警告
+  (clw/check-private-advice 'avy--read-candidates '(0 . 1)
+                            "avy--read-candidates 直接调用")
   (defun clw/avy-goto-char-timer (&optional arg)
     "Read one or many consecutive chars and jump to the first one.
 The window scope is determined by `avy-all-windows' (ARG negates it).
@@ -2595,7 +2663,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
                 (avy-process avy--old-cands))))
 
   :bind (("C-M-'"   . avy-resume)
-         ("C-'"     . clw/avy-goto-char-this-window)
+         ("C-'"     . clw/avy-goto-word-frame)
          ("M-j"     . clw/avy-goto-char-timer)
          ("M-s y"   . avy-copy-line)
          ("M-s M-y" . avy-copy-region)
@@ -2729,8 +2797,11 @@ This differs from Avy's goto-char-timer in how it processes parens."
         (cl-substitute 'embark-sorted-minibuffer-candidates
                        'embark-minibuffer-candidates
                        embark-candidate-collectors))
-  ;; 关闭 flymake target，避免在 flymake 错误处误把错误当成 target
-  (delete 'embark-target-flymake-at-point embark-target-finders)
+  ;; 关闭 flymake target，避免在 flymake 错误处误把错误当成 target。
+  ;; 用 setq+delq 而非裸 delete：delete 靠就地破坏列表结构生效，目标一旦排在
+  ;; 列表首位（上游版本可能调整默认顺序）返回的新列表不会写回变量，静默失效
+  (setq embark-target-finders
+        (delq 'embark-target-flymake-at-point embark-target-finders))
 
   ;; 重复动作：执行后按同一动作键即可再次执行
   (cl-pushnew 'down-list embark-repeat-actions)
@@ -2796,7 +2867,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
              ("|" embark-shell-command-on-buffer)    ; 以 shell 命令处理 buffer 内容
              ("x" embark-open-externally)            ; 用系统默认程序打开
              ("t" toggle-truncate-lines)))           ; 折行开关
-        (define-key map (kbd key) command))
+        (keymap-set map key command))
       map)
     "对“当前 buffer 对应文件”执行动作的 keymap。")
 
@@ -2840,6 +2911,9 @@ This differs from Avy's goto-char-timer in how it processes parens."
     "占位命令：实际行为由 `embark-around-action-hooks' 中注册的 around 钩子决定。"
     (interactive))
 
+  ;; embark--default-action 是 embark 私有 API
+  (clw/check-private-advice 'embark--default-action '(1 . 1)
+                            "embark--default-action 直接调用")
   (cl-defun clw/embark--call-prefix-action
       (&rest rest &key run type &allow-other-keys)
     "先执行 `clw/window-prefix-map' 中所按前缀键对应的命令，再执行该 type 的默认动作。"
@@ -2892,7 +2966,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
         (apply fn args))))
   (defvar clw/embark-completing-read-prompter-map
     (let ((map (make-sparse-keymap)))
-      (define-key map (kbd "<tab>") #'abort-recursive-edit)
+      (keymap-set map "<tab>" #'abort-recursive-edit)
       map))
   (advice-add 'embark-completing-read-prompter :around
               (clw/with-minibuffer-keymap clw/embark-completing-read-prompter-map))
@@ -2943,6 +3017,9 @@ This differs from Avy's goto-char-timer in how it processes parens."
             "\\*Occur\\*"
             help-mode
             compilation-mode
+            ;; magit 的 *Process* 走 same-window-except-diff 的“另开窗口”分支，
+            ;; 但没有对应的 display-buffer 规则，会随机吃编辑窗口；当小弹层管理
+            magit-process-mode
             shell-mode "^\\*shell.*\\*"
             "\\*xref\\*"))
   :config
@@ -2963,7 +3040,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :bind (("M-+" . tempel-complete)
          ("M-*" . tempel-insert))
   :init
-  (defun tempel-setup-capf ()
+  (defun clw/tempel-setup-capf ()
     ;; Add the Tempel Capf to `completion-at-point-functions'.
     ;; `tempel-expand' only triggers on exact matches. Alternatively use
     ;; `tempel-complete' if you want to see all matches, but then you
@@ -2974,7 +3051,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
     (setq-local completion-at-point-functions
                 (cons #'tempel-expand
                       completion-at-point-functions)))
-  (add-hook 'prog-mode-hook 'tempel-setup-capf))
+  (add-hook 'prog-mode-hook #'clw/tempel-setup-capf))
 ;;@@ EGLOT-TEMPEL eglot snippet 桥接 tempel
 (use-package eglot-tempel
   :after (eglot tempel)
@@ -3304,14 +3381,17 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   :config
   (setq paredit-lighter " Par")
   (dolist (binding '("C-<left>" "C-<right>" "M-s" "M-?"))
-    (define-key paredit-mode-map (read-kbd-macro binding) nil)))
+    (keymap-unset paredit-mode-map binding)))
 ;;@@ puni
 (use-package puni
+  ;; 定义在 :init：hook 执行时 puni 必已加载，命名函数避免重复 lambda
+  :init
+  (defun clw/puni-off () (puni-mode -1))
   :hook ((prog-mode . puni-mode)
          ;; .lisp 进 lisp-mode（派生 prog-mode），与 paredit 同时启用会抢
          ;; 括号编辑按键；paredit 由上面的 :hook 负责，这里排除 puni
-         (emacs-lisp-mode . (lambda () (puni-mode -1)))
-         (lisp-mode . (lambda () (puni-mode -1))))
+         (emacs-lisp-mode . clw/puni-off)
+         (lisp-mode . clw/puni-off))
   :bind (:map puni-mode-map
          ("M-(" . puni-wrap-round)
          ("C-(" . puni-slurp-backward)
@@ -3365,6 +3445,10 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   ;; `slime-fuzzy-default-completion-ui' t 让 fuzzy 返回 capf 格式交给
   ;; corfu/fussy，而不是 SLIME 自建的 *Completions* 界面。
   (setq slime-fuzzy-default-completion-ui t)
+  ;; 限制 fuzzy 的计算规模，缩短同步阻塞窗口：C-g 打断后 SBCL 仍会跑完并
+  ;; 返回迟到回复，窗口越小越不容易触发 "Reply to canceled synchronous eval"
+  (setq slime-fuzzy-completion-time-limit-in-msec 600)
+  (setq slime-fuzzy-completion-limit 200)
   (setq slime-completion-at-point-functions
         '(slime-filename-completion
           slime-fuzzy-complete-symbol
@@ -3386,15 +3470,17 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   :hook (emacs-lisp-mode . aggressive-indent-mode))
 ;;@@HIDESHOW 代码块折叠：Org 式一键循环（来源 karthinks.com "Simple folding with Hideshow"）
 ;; Emacs 31+ 的 hideshow 对 *-ts-mode 原生支持（treesit 识别代码块），无需配各语言正则
+;; 函数带 clw/ 前缀：Emacs 31+ 起 hideshow.el 自带内置 `hs-cycle'（绑在 hs-minor-mode
+;; 的 TAB），不带前缀的 defun 会把它整体顶掉，连内置绑定也被换成这里的实现
 (use-package hideshow
   ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
   :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
                      python-ts-mode) . hs-minor-mode)
-  :bind (("C-<tab>" . hs-cycle)
-         ("C-S-<tab>" . hs-global-cycle))
+  :bind (("C-<tab>" . clw/hs-cycle)
+         ("C-S-<tab>" . clw/hs-global-cycle))
   ;; :config 里定义的命令必须列在 :commands 生成 autoload 桩，
   ;; 否则 hideshow 未加载时按键 = void-function（惰性加载时序问题）
-  :commands (hs-cycle hs-global-cycle)
+  :commands (clw/hs-cycle clw/hs-global-cycle)
   :config
   (defun clw/hs-ensure ()
     "确保 hideshow 已加载且 `hs-minor-mode' 开启。
@@ -3404,7 +3490,7 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
       (hs-minor-mode 1))
     (bound-and-true-p hs-minor-mode))
 
-  (defun hs-cycle (&optional level)
+  (defun clw/hs-cycle (&optional level)
     "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
 数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-<tab> 俯瞰到第 3 层）。
 注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
@@ -3415,35 +3501,35 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
           (inhibit-message t))
       (if (= level 1)
           (pcase last-command
-            ('hs-cycle
+            ('clw/hs-cycle
              (hs-hide-level 1)
-             (setq this-command 'hs-cycle-children))
-            ('hs-cycle-children
+             (setq this-command 'clw/hs-cycle-children))
+            ('clw/hs-cycle-children
              ;; TODO: Fix this case. `hs-show-block' needs to be
              ;; called twice to open all folds of the parent
              ;; block.
              (save-excursion (hs-show-block))
              (hs-show-block)
-             (setq this-command 'hs-cycle-subtree))
-            ('hs-cycle-subtree
+             (setq this-command 'clw/hs-cycle-subtree))
+            ('clw/hs-cycle-subtree
              (hs-hide-block))
             (_
-             (if (not (hs-already-hidden-p))
-                 (hs-hide-block)
-               (hs-hide-level 1)
-               (setq this-command 'hs-cycle-children))))
+             (if (hs-already-hidden-p)
+                 (progn (hs-hide-level 1)
+                        (setq this-command 'clw/hs-cycle-children))
+               (hs-hide-block))))
         (hs-hide-level level)
         (setq this-command 'hs-hide-level))))
 
-  (defun hs-global-cycle ()
+  (defun clw/hs-global-cycle ()
     "整个 buffer 折叠 ↔ 全展开切换。"
     (interactive)
     (unless (clw/hs-ensure)
       (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
     (pcase last-command
-      ('hs-global-cycle
+      ('clw/hs-global-cycle
        (save-excursion (hs-show-all))
-       (setq this-command 'hs-global-show))
+       (setq this-command 'clw/hs-global-show))
       (_ (hs-hide-all)))))
 ;;@@ APHELEIA 保存时自动格式化，不移动光标
 (use-package apheleia
@@ -3491,6 +3577,9 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   ;; 注意：正则方案只跳过显示，消息仍记入 *Messages*（受 message-log-max
   ;; 默认 1000 条自动截断），与原 advice 的「完全不记录」有细微差别。
   ;; use the custom prompter that shows session labels with "choose a dir" fallback
+  ;; project-x--session-label 是 project-x 私有 API
+  (clw/check-private-advice 'project-x--session-label '(1 . 1)
+                            "project-x--session-label 直接调用")
   (defun clw/project-prompt ()
     "Prompt for a project with session labels and 'choose a dir' fallback.
 Combines project-x's session label display with the built-in
@@ -3562,6 +3651,9 @@ ORIG 为原函数，ITEM 为 session 中的 buffer 条目。"
 (use-package p-search
   :defer t
   :config
+  ;; p-search--rx-to-string 是 p-search 私有 API
+  (clw/check-private-advice 'p-search--rx-to-string '(2 . 2)
+                            "p-search--rx-to-string 直接调用")
   (defun clw/p-search-query--command (fun term cmd)
     (let* ((term-str (p-search--rx-to-string term cmd))
            (case-insensitive-p
@@ -3682,7 +3774,7 @@ way-func can be | or _"
 ;;@@ 文字计数，可以处理中文和英文
 ;; Author: Andy Stewart <lazycat.manatee@gmail.com>
 ;; http://www.emacswiki.org/emacs/download/basic-toolkit.el
-(defun count-ce-words (beg end)
+(defun clw/count-ce-words (beg end)
   "Count Chinese and English words in marked region."
   (interactive "r")
   (let ((cn-word 0)
@@ -3693,22 +3785,25 @@ way-func can be | or _"
           en-word (count-matches "\\w+\\W" beg end))
     (setq total-word (+ cn-word en-word)
           total-byte (+ cn-word (abs (- beg end))))
-    (message (format "Total: %d (CN: %d, EN: %d) words, %d bytes."
-                     total-word cn-word en-word total-byte))))
+    (message "Total: %d (CN: %d, EN: %d) words, %d bytes."
+             total-word cn-word en-word total-byte)))
 
 ;;@@ 删除 *{name}* 的 buffer
-(defun kill-unused-buffers ()
+(defun clw/kill-unused-buffers ()
+  "关闭所有 *...* 形式的临时 buffer，但保留核心 buffer。
+星形通配会误杀 `*Messages*`（排错日志）、`*Warnings*`、`*scratch*`，故用保留名单。"
   (interactive)
-  (ignore-errors
-    (save-excursion
-      (dolist (buf (buffer-list))
-        (set-buffer buf)
-        (if (and (string-prefix-p "*" (buffer-name))
-                 (string-suffix-p "*" (buffer-name)))
-            (kill-buffer buf))))))
+  (let ((keep '("*Messages*" "*Warnings*" "*scratch*" "*Backtrace*")))
+    (dolist (buf (buffer-list))
+      (when (buffer-live-p buf)
+        (let ((name (buffer-name buf)))
+          (when (and (not (member name keep))
+                     (string-prefix-p "*" name)
+                     (string-suffix-p "*" name))
+            (kill-buffer buf)))))))
 
 ;;@@ 对整个 buffer 进行缩进
-(defun indent-buffer ()
+(defun clw/indent-buffer ()
   "Automatic format current buffer."
   (interactive)
   (save-excursion
