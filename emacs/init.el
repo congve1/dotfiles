@@ -22,7 +22,7 @@
                         (buffer-string))))
          ;; 不区分大小写匹配 "microsoft" 或 "WSL"
          (string-match-p "\\(microsoft\\|WSL\\)" version))))
-;;@ 缓存 WSL 检测结果，避免每次读 /proc/version
+;; 缓存 WSL 检测结果，避免每次读 /proc/version
 (defconst sys/wslp (clw/is-wsl-p) "Are we running in WSL?")
 ;;@ 辅助函数
 (defun clw/load-theme (theme)
@@ -175,9 +175,9 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。
 (setopt scroll-conservatively 10000)
 ;; C-M-v (scroll-other-window) 默认滚最近最少用的窗口，翻参考资料更顺手
 (setopt other-window-scroll-default #'get-lru-window)
-;; 只读文件自动进入 view-mode：用 pager 键浏览，q 退出（karthinks batteries）
+;;@@ 只读文件自动进入 view-mode（karthinks batteries：pager 键浏览，q 退出）
 (setopt view-read-only t)
-;; M-u/M-l/M-c 改为 dwim：有选区作用于选区，否则作用于单词
+;;@@ 大小写命令 DWIM 化：有选区作用于选区，否则作用于单词
 (keymap-global-set "<remap> <upcase-word>" #'upcase-dwim)
 (keymap-global-set "<remap> <downcase-word>" #'downcase-dwim)
 (keymap-global-set "<remap> <capitalize-word>" #'capitalize-dwim)
