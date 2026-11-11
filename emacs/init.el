@@ -563,12 +563,6 @@ If in WSL, try to get gateway via system commands."
   (setopt eshell-scroll-show-maximum-output nil))
 ;;@@COMINT 剥离 Windows 程序输出中混入的 \r（WSL interop 跑 .exe 时常见）
 (add-hook 'comint-output-filter-functions #'comint-strip-ctrl-m)
-;;@@WGREP grep 结果缓冲区直接编辑替换，改完自动写回文件
-(use-package wgrep
-  :defer t
-  :custom
-  (wgrep-auto-save-buffer t)
-  (wgrep-change-readonly-file t))
 ;;@@RE-BUILDER 正则可视化构造后直接进入替换（来源 karthinks "Bridging Islands"）
 ;; C-M-% 打开 re-builder 高亮匹配、交互构造正则（C-c C-i 可切 rx 表达式语法），
 ;; RET 直接把正则带入 query-replace-regexp，替代"构造→复制→退出→粘贴"四步；
@@ -1022,37 +1016,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
                                          (with-current-buffer (find-file-noselect f)
                                            (kill-buffer))))))))) ; 打开即关，触发 org-mode 模块加载链
 
-;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
-(use-package org-modern
-  :if (display-graphic-p)
-  :hook ((org-mode . org-modern-mode)
-         (org-agenda-finalize . org-modern-agenda))
-  :config
-  (setq org-modern-hide-stars nil
-        org-modern-star 'replace
-        org-modern-todo t
-        org-modern-keyword "‣ "
-        org-modern-horizontal-rule t
-        org-modern-table t
-        ;; 优先级 / 标签 / 块名徽标化（agenda 与 org buffer 同时生效）
-        org-modern-priority t
-        org-modern-tag t
-        org-modern-block-name t))
-
-;;@@ORG-APPEAR 光标进入时自动展开 emphasis/link 标记
-(use-package org-appear
-  :hook (org-mode . org-appear-mode)
-  :config
-  (setq org-appear-autoemphasis t
-        org-appear-autolinks t
-        org-appear-autosubmarkers t
-        org-appear-autoentities t
-        org-appear-autokeywords t
-        org-appear-delay 0.3))
-
-;;@@TOC-ORG 自动维护 :TOC: 目录，适合 README
-(use-package toc-org
-  :hook (org-mode . toc-org-mode))
 ;;@@CC-MODE C 系语言基础配置
 (use-package cc-mode
   :defer t
@@ -1544,13 +1507,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 
 (with-eval-after-load 'dired
   (keymap-set dired-mode-map "<remap> <dired-do-open>" #'clw/open-in-external-app))
-;;@@DIRED-HIST dired 目录历史 l/r 前进后退（对齐 help/info/eww 惯例）
-;; 接管 dired 原有的 l (dired-do-redisplay) 与 r (wdired) 两键
-(use-package dired-hist
-  :hook (dired-mode . dired-hist-mode)
-  :config
-  (keymap-set dired-mode-map "l" #'dired-hist-go-back)
-  (keymap-set dired-mode-map "r" #'dired-hist-go-forward))
 ;;@@ minibuffer配置
 (use-package minibuffer
   :custom
@@ -1701,6 +1657,169 @@ Lisp function does not specify a special indentation."
                                            '(1))))))
       (set-face-attribute 'fill-column-indicator nil :stipple stipple))))
 
+;;@@SPEEDBAR 侧边栏文件/标签浏览（内置，免 :ensure）
+(use-package speedbar
+  ;; C-| 是独立键事件（与 C-\ 不同）；TUI 下终端可能把 Ctrl+Shift+\ 发成
+  ;; C-\（已绑定 toggle-input-method），此时用 M-x speedbar-window
+  :bind ("C-|" . speedbar-window)
+  :custom
+  (speedbar-window-side 'right)
+  (speedbar-window-default-width 30)
+  (speedbar-vc-do-check nil)
+  (speedbar-obj-do-check nil)
+  (speedbar-use-images nil)
+  (speedbar-use-imenu-flag nil)
+  (speedbar-use-tool-tips-flag nil)
+  (speedbar-hide-button-brackets-flag t)
+  (speedbar-mode-functions-list nil)
+  (speedbar-mode-specific-contents-flag nil)
+  (speedbar-dynamic-tags-function-list nil)
+  (speedbar-special-mode-expansion-list nil)
+  (speedbar-show-unknown-files t)
+  (speedbar-smart-directory-expand-flag nil)
+  (speedbar-verbosity-level 0)
+  (speedbar-directory-unshown-regexp "^\\(\\.\\.*$\\)")
+  :config
+  ;; 放在 :config 而不是 :bind 的 :map 里：speedbar-mode-map 要等库加载后存在
+  (keymap-set speedbar-mode-map "q" #'delete-window))
+
+;;@@PULSE 跳转后脉冲高亮当前行（内置 pulse，替代 pulsar）
+(use-package pulse
+  :hook ((consult-after-jump . clw/pulse-recenter-top)
+         (consult-after-jump . clw/pulse-reveal-entry)
+         (imenu-after-jump . clw/pulse-recenter-top)
+         (imenu-after-jump . clw/pulse-reveal-entry)
+         (next-error . clw/pulse-line))
+  :custom
+  ;; 非 nil 时逐渐淡出的脉冲；终端不支持时自动退化为静态高亮
+  (pulse-flag t)
+  :config
+  (defun clw/pulse-line ()
+    "Pulse the current line using the built-in pulse face."
+    (interactive)
+    (pulse-momentary-highlight-one-line (point)))
+
+  (defun clw/pulse-recenter-top ()
+    "Reposition point at the top of the window and pulse the line."
+    (recenter 0)
+    (clw/pulse-line))
+
+  (defun clw/pulse-reveal-entry ()
+    "Reveal the Org or Outline entry at point after a jump."
+    (cond
+     ((and (eq major-mode 'org-mode)
+           (org-at-heading-p))
+      (org-show-entry))
+     ((and (or (eq major-mode 'outline-mode)
+               (bound-and-true-p outline-minor-mode))
+           (outline-on-heading-p))
+      (outline-show-entry))))
+
+  ;; 对齐原 pulsar-pulse-functions 的常用默认命令，并保留 ace-window、
+  ;; outline 标题跳转等此前显式追加的触发项。imenu/next-error/occur
+  ;; 已由上面的专用 hook 覆盖，不在此重复触发。
+  (defvar clw/pulse-commands
+    '(ace-window
+      backward-page forward-page
+      bookmark-jump
+      delete-other-windows delete-window quit-window
+      dired-maybe-insert-subdir dired-up-directory dired-goto-file
+      dired-next-dirline dired-prev-dirline
+      goto-line
+      handle-select-window handle-switch-frame
+      move-to-window-line-top-bottom
+      narrow-to-defun narrow-to-page narrow-to-region widen
+      next-buffer previous-buffer
+      org-backward-heading-same-level org-forward-heading-same-level
+      org-next-visible-heading org-previous-visible-heading
+      other-window next-multiframe-window
+      outline-backward-same-level outline-forward-same-level
+      outline-next-visible-heading outline-previous-visible-heading
+      outline-up-heading
+      recenter-top-bottom reposition-window
+      scroll-down-command scroll-up-command
+      tab-close tab-new tab-next tab-previous
+      windmove-down windmove-left windmove-right windmove-up
+      windmove-swap-states-down windmove-swap-states-left
+      windmove-swap-states-right windmove-swap-states-up))
+
+  (defun clw/pulse-post-command ()
+    "Pulse the current line after commands in `clw/pulse-commands'."
+    (when (and (not (minibufferp))
+               (memq (or real-this-command this-command)
+                     clw/pulse-commands))
+      (clw/pulse-line)))
+
+  (add-hook 'post-command-hook #'clw/pulse-post-command))
+
+;;@@VUNDO 可视化 undo，比 undo-tree 更好
+(use-package vundo
+  :bind ("C-?" . vundo))
+
+;;@@HIDESHOW 代码块折叠：Org 式一键循环（来源 karthinks.com "Simple folding with Hideshow"）
+;; Emacs 31+ 的 hideshow 对 *-ts-mode 原生支持（treesit 识别代码块），无需配各语言正则
+;; 函数带 clw/ 前缀：Emacs 31+ 起 hideshow.el 自带内置 `hs-cycle'（绑在 hs-minor-mode
+;; 的 TAB），不带前缀的 defun 会把它整体顶掉，连内置绑定也被换成这里的实现
+(use-package hideshow
+  ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
+  :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
+                     python-ts-mode) . hs-minor-mode)
+  :bind (("C-<tab>" . clw/hs-cycle)
+         ("C-S-<tab>" . clw/hs-global-cycle))
+  ;; :config 里定义的命令必须列在 :commands 生成 autoload 桩，
+  ;; 否则 hideshow 未加载时按键 = void-function（惰性加载时序问题）
+  :commands (clw/hs-cycle clw/hs-global-cycle)
+  :config
+  (defun clw/hs-ensure ()
+    "确保 hideshow 已加载且 `hs-minor-mode' 开启。
+当前 major-mode 无注释语法（如 fundamental-mode）而拒绝开启时返回 nil。"
+    (require 'hideshow)
+    (unless (bound-and-true-p hs-minor-mode)
+      (hs-minor-mode 1))
+    (bound-and-true-p hs-minor-mode))
+
+  (defun clw/hs-cycle (&optional level)
+    "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
+数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-<tab> 俯瞰到第 3 层）。
+注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
+    (interactive "p")
+    (unless (clw/hs-ensure)
+      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
+    (let (message-log-max
+          (inhibit-message t))
+      (if (= level 1)
+          (pcase last-command
+            ('clw/hs-cycle
+             (hs-hide-level 1)
+             (setq this-command 'clw/hs-cycle-children))
+            ('clw/hs-cycle-children
+             ;; TODO: Fix this case. `hs-show-block' needs to be
+             ;; called twice to open all folds of the parent
+             ;; block.
+             (save-excursion (hs-show-block))
+             (hs-show-block)
+             (setq this-command 'clw/hs-cycle-subtree))
+            ('clw/hs-cycle-subtree
+             (hs-hide-block))
+            (_
+             (if (hs-already-hidden-p)
+                 (progn (hs-hide-level 1)
+                        (setq this-command 'clw/hs-cycle-children))
+               (hs-hide-block))))
+        (hs-hide-level level)
+        (setq this-command 'hs-hide-level))))
+
+  (defun clw/hs-global-cycle ()
+    "整个 buffer 折叠 ↔ 全展开切换。"
+    (interactive)
+    (unless (clw/hs-ensure)
+      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
+    (pcase last-command
+      ('clw/hs-global-cycle
+       (save-excursion (hs-show-all))
+       (setq this-command 'clw/hs-global-show))
+      (_ (hs-hide-all)))))
+
 ;;@3 外部安装的 elisp 包
 ;;@@ 指定需要安装的包
 ;; 自动安装的唯一事实源是这个独立变量，而非 package-selected-packages：
@@ -1708,58 +1827,58 @@ Lisp function does not specify a special indentation."
 ;; 应用并覆盖下面的 setopt——只改 init.el 新加的包会被冲掉，自动安装检测不到。
 ;; 故检测/安装都遍历 clw/package-list；setopt 仅为 package-install/autoremove 服务。
 (defvar clw/package-list
-        '(;; 安装的包列表
-          markdown-mode ; 提供 emacs 中的 markdown 支持
-          ace-window ; 窗口字母标号跳转（M-o，替代 winum）
-          ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
-          avy ; 快速跳转（M-j 输入字符序列跳转）
-          pyim ; 拼音输入法
-          pyim-basedict ; pyim 依赖项
-          popup ; pyim 依赖项
-          vertico ; M-x 补全
-          marginalia
-          eldoc-box ; 提供悬浮的 eldoc 补全
-          vundo ; 可视化 undo，undo-tree 的替代品
-          magit ; 强大的 git UI
-          fussy ; 模糊补全 + fzf 打分排序（替代 orderless）
-          consult ; 异步查询框架
-          consult-eglot
-          wgrep ; 基于 grep 的批量替换工具
-          dired-hist ; dired 目录历史导航（l/r）
-          diminish ; 让某些 mode 标识不在 modeline 显示
-          ;;yasnippet ; 强大的代码模板工具
-          breadcrumb ; 面包屑导航
-          embark ; DWIM 工具
-          embark-consult
-          popper ; 类似 popwin 但更好用
-          expreg ; 类似 expand-region，但更好
-          corfu ; corfu 补全前端，company 的替代品
-          tempel ; 代码模板引擎
-          eglot-tempel ; eglot LSP snippet 桥接 tempel
-          cape ; 为 corfu 提供一些后端
-          envrc ; 类似 buffer-env
-          p-search ; 某种搜索工具
-          doom-themes
-          rainbow-delimiters
-          highlight-escape-sequences
-          iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
-          move-dup
-          symbol-overlay
-          ws-butler
-          diff-hl
-          mixed-pitch
-          verb
-          paredit
-          puni
-          aggressive-indent
-          apheleia
-          jinx
-          highlight-quoted
-          org-modern ; org-mode 现代化外观
-          org-appear ; 光标进入自动展开 emphasis/link 标记
-          toc-org ; 自动维护 :TOC: 目录
-          slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
-          ))
+  '(;; 安装的包列表
+    markdown-mode ; 提供 emacs 中的 markdown 支持
+    ace-window ; 窗口字母标号跳转（M-o，替代 winum）
+    ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
+    avy ; 快速跳转（M-j 输入字符序列跳转）
+    pyim ; 拼音输入法
+    pyim-basedict ; pyim 依赖项
+    popup ; pyim 依赖项
+    vertico ; M-x 补全
+    marginalia
+    eldoc-box ; 提供悬浮的 eldoc 补全
+    vundo ; 可视化 undo，undo-tree 的替代品
+    magit ; 强大的 git UI
+    fussy ; 模糊补全 + fzf 打分排序（替代 orderless）
+    consult ; 异步查询框架
+    consult-eglot
+    wgrep ; 基于 grep 的批量替换工具
+    dired-hist ; dired 目录历史导航（l/r）
+    diminish ; 让某些 mode 标识不在 modeline 显示
+    ;;yasnippet ; 强大的代码模板工具
+    breadcrumb ; 面包屑导航
+    embark ; DWIM 工具
+    embark-consult
+    popper ; 类似 popwin 但更好用
+    expreg ; 类似 expand-region，但更好
+    corfu ; corfu 补全前端，company 的替代品
+    tempel ; 代码模板引擎
+    eglot-tempel ; eglot LSP snippet 桥接 tempel
+    cape ; 为 corfu 提供一些后端
+    envrc ; 类似 buffer-env
+    p-search ; 某种搜索工具
+    doom-themes
+    rainbow-delimiters
+    highlight-escape-sequences
+    iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
+    move-dup
+    symbol-overlay
+    ws-butler
+    diff-hl
+    mixed-pitch
+    verb
+    paredit
+    puni
+    aggressive-indent
+    apheleia
+    jinx
+    highlight-quoted
+    org-modern ; org-mode 现代化外观
+    org-appear ; 光标进入自动展开 emphasis/link 标记
+    toc-org ; 自动维护 :TOC: 目录
+    slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
+    ))
 (setopt package-selected-packages clw/package-list)
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
@@ -2280,101 +2399,6 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
                  (this-command cmd))
             (call-interactively cmd)))))))
 
-;;@@SPEEDBAR 侧边栏文件/标签浏览（内置，免 :ensure）
-(use-package speedbar
-  ;; C-| 是独立键事件（与 C-\ 不同）；TUI 下终端可能把 Ctrl+Shift+\ 发成
-  ;; C-\（已绑定 toggle-input-method），此时用 M-x speedbar-window
-  :bind ("C-|" . speedbar-window)
-  :custom
-  (speedbar-window-side 'right)
-  (speedbar-window-default-width 30)
-  (speedbar-vc-do-check nil)
-  (speedbar-obj-do-check nil)
-  (speedbar-use-images nil)
-  (speedbar-use-imenu-flag nil)
-  (speedbar-use-tool-tips-flag nil)
-  (speedbar-hide-button-brackets-flag t)
-  (speedbar-mode-functions-list nil)
-  (speedbar-mode-specific-contents-flag nil)
-  (speedbar-dynamic-tags-function-list nil)
-  (speedbar-special-mode-expansion-list nil)
-  (speedbar-show-unknown-files t)
-  (speedbar-smart-directory-expand-flag nil)
-  (speedbar-verbosity-level 0)
-  (speedbar-directory-unshown-regexp "^\\(\\.\\.*$\\)")
-  :config
-  ;; 放在 :config 而不是 :bind 的 :map 里：speedbar-mode-map 要等库加载后存在
-  (keymap-set speedbar-mode-map "q" #'delete-window))
-
-;;@@PULSE 跳转后脉冲高亮当前行（内置 pulse，替代 pulsar）
-(use-package pulse
-  :hook ((consult-after-jump . clw/pulse-recenter-top)
-         (consult-after-jump . clw/pulse-reveal-entry)
-         (imenu-after-jump . clw/pulse-recenter-top)
-         (imenu-after-jump . clw/pulse-reveal-entry)
-         (next-error . clw/pulse-line))
-  :custom
-  ;; 非 nil 时逐渐淡出的脉冲；终端不支持时自动退化为静态高亮
-  (pulse-flag t)
-  :config
-  (defun clw/pulse-line ()
-    "Pulse the current line using the built-in pulse face."
-    (interactive)
-    (pulse-momentary-highlight-one-line (point)))
-
-  (defun clw/pulse-recenter-top ()
-    "Reposition point at the top of the window and pulse the line."
-    (recenter 0)
-    (clw/pulse-line))
-
-  (defun clw/pulse-reveal-entry ()
-    "Reveal the Org or Outline entry at point after a jump."
-    (cond
-     ((and (eq major-mode 'org-mode)
-           (org-at-heading-p))
-      (org-show-entry))
-     ((and (or (eq major-mode 'outline-mode)
-               (bound-and-true-p outline-minor-mode))
-           (outline-on-heading-p))
-      (outline-show-entry))))
-
-  ;; 对齐原 pulsar-pulse-functions 的常用默认命令，并保留 ace-window、
-  ;; outline 标题跳转等此前显式追加的触发项。imenu/next-error/occur
-  ;; 已由上面的专用 hook 覆盖，不在此重复触发。
-  (defvar clw/pulse-commands
-    '(ace-window
-      backward-page forward-page
-      bookmark-jump
-      delete-other-windows delete-window quit-window
-      dired-maybe-insert-subdir dired-up-directory dired-goto-file
-      dired-next-dirline dired-prev-dirline
-      goto-line
-      handle-select-window handle-switch-frame
-      move-to-window-line-top-bottom
-      narrow-to-defun narrow-to-page narrow-to-region widen
-      next-buffer previous-buffer
-      org-backward-heading-same-level org-forward-heading-same-level
-      org-next-visible-heading org-previous-visible-heading
-      other-window next-multiframe-window
-      outline-backward-same-level outline-forward-same-level
-      outline-next-visible-heading outline-previous-visible-heading
-      outline-up-heading
-      recenter-top-bottom reposition-window
-      scroll-down-command scroll-up-command
-      tab-close tab-new tab-next tab-previous
-      windmove-down windmove-left windmove-right windmove-up
-      windmove-swap-states-down windmove-swap-states-left
-      windmove-swap-states-right windmove-swap-states-up))
-
-  (defun clw/pulse-post-command ()
-    "Pulse the current line after commands in `clw/pulse-commands'."
-    (when (and (not (minibufferp))
-               (memq (or real-this-command this-command)
-                     clw/pulse-commands))
-      (clw/pulse-line)))
-
-  (add-hook 'post-command-hook #'clw/pulse-post-command))
-
 ;;@@GHOSTEL 基于 Ghostty VT 引擎的终端模拟器（Windows 原生可用，预编译模块自动下载）
 (use-package ghostel
   :bind (("C-x m" . ghostel)               ; 打开终端（compose-mail 未使用，安全接管）
@@ -2522,9 +2546,6 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   :custom-face
   (eldoc-box-body ((t (:inherit (variable-pitch)))))
   (eldoc-box-markdown-separator ((t (:inherit (fringe))))))
-;;@@VUNDO 可视化 undo，比 undo-tree 更好
-(use-package vundo
-  :bind ("C-?" . vundo))
 ;;@@AVY 快速跳转（输入字符序列，显示标签按标签跳转）
 (use-package avy
   :commands (avy-goto-word-1 avy-goto-char-2 avy-goto-char-timer)
@@ -2712,10 +2733,10 @@ This differs from Avy's goto-char-timer in how it processes parens."
                              avy-all-windows))
           (avy-single-candidate-jump nil))
       (avy-with avy-goto-char-timer
-                (setq avy--old-cands (avy--read-candidates
-                                      (lambda (str) (clw/avy-replace-syntax-class
-                                                     (regexp-quote str)))))
-                (avy-process avy--old-cands))))
+        (setq avy--old-cands (avy--read-candidates
+                              (lambda (str) (clw/avy-replace-syntax-class
+                                             (regexp-quote str)))))
+        (avy-process avy--old-cands))))
 
   :bind (("C-M-'"   . avy-resume)
          ("C-'"     . clw/avy-goto-word-frame)
@@ -3525,69 +3546,6 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
 ;;@@ aggressive-indent
 (use-package aggressive-indent
   :hook (emacs-lisp-mode . aggressive-indent-mode))
-;;@@HIDESHOW 代码块折叠：Org 式一键循环（来源 karthinks.com "Simple folding with Hideshow"）
-;; Emacs 31+ 的 hideshow 对 *-ts-mode 原生支持（treesit 识别代码块），无需配各语言正则
-;; 函数带 clw/ 前缀：Emacs 31+ 起 hideshow.el 自带内置 `hs-cycle'（绑在 hs-minor-mode
-;; 的 TAB），不带前缀的 defun 会把它整体顶掉，连内置绑定也被换成这里的实现
-(use-package hideshow
-  ;; 只挂 treesit 主力语言（python 经典模式无内置块识别，不挂）
-  :hook ((go-ts-mode rust-ts-mode js-ts-mode typescript-ts-base-mode
-                     python-ts-mode) . hs-minor-mode)
-  :bind (("C-<tab>" . clw/hs-cycle)
-         ("C-S-<tab>" . clw/hs-global-cycle))
-  ;; :config 里定义的命令必须列在 :commands 生成 autoload 桩，
-  ;; 否则 hideshow 未加载时按键 = void-function（惰性加载时序问题）
-  :commands (clw/hs-cycle clw/hs-global-cycle)
-  :config
-  (defun clw/hs-ensure ()
-    "确保 hideshow 已加载且 `hs-minor-mode' 开启。
-当前 major-mode 无注释语法（如 fundamental-mode）而拒绝开启时返回 nil。"
-    (require 'hideshow)
-    (unless (bound-and-true-p hs-minor-mode)
-      (hs-minor-mode 1))
-    (bound-and-true-p hs-minor-mode))
-
-  (defun clw/hs-cycle (&optional level)
-    "Org 式循环折叠：展开 → 折叠 → 只显示子层 → 展开…
-数字前缀 LEVEL 表示只展开到第 LEVEL 层（如 C-3 C-<tab> 俯瞰到第 3 层）。
-注意：内部 last-command 状态机别重构，看似冗余但一简化就微妙地坏（原文警告）。"
-    (interactive "p")
-    (unless (clw/hs-ensure)
-      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
-    (let (message-log-max
-          (inhibit-message t))
-      (if (= level 1)
-          (pcase last-command
-            ('clw/hs-cycle
-             (hs-hide-level 1)
-             (setq this-command 'clw/hs-cycle-children))
-            ('clw/hs-cycle-children
-             ;; TODO: Fix this case. `hs-show-block' needs to be
-             ;; called twice to open all folds of the parent
-             ;; block.
-             (save-excursion (hs-show-block))
-             (hs-show-block)
-             (setq this-command 'clw/hs-cycle-subtree))
-            ('clw/hs-cycle-subtree
-             (hs-hide-block))
-            (_
-             (if (hs-already-hidden-p)
-                 (progn (hs-hide-level 1)
-                        (setq this-command 'clw/hs-cycle-children))
-               (hs-hide-block))))
-        (hs-hide-level level)
-        (setq this-command 'hs-hide-level))))
-
-  (defun clw/hs-global-cycle ()
-    "整个 buffer 折叠 ↔ 全展开切换。"
-    (interactive)
-    (unless (clw/hs-ensure)
-      (user-error "当前 major-mode %s 不支持 Hideshow" major-mode))
-    (pcase last-command
-      ('clw/hs-global-cycle
-       (save-excursion (hs-show-all))
-       (setq this-command 'clw/hs-global-show))
-      (_ (hs-hide-all)))))
 ;;@@ APHELEIA 保存时自动格式化，不移动光标
 (use-package apheleia
   :hook (prog-mode . apheleia-mode)
@@ -3723,6 +3681,54 @@ ORIG 为原函数，ITEM 为 session 中的 buffer 条目。"
                             "p-search-query--command :around")
   (advice-add 'p-search-query--command
               :around #'clw/p-search-query--command))
+
+;;@@WGREP grep 结果缓冲区直接编辑替换，改完自动写回文件
+(use-package wgrep
+  :defer t
+  :custom
+  (wgrep-auto-save-buffer t)
+  (wgrep-change-readonly-file t))
+
+;;@@ORG-MODERN 现代化 org 外观（GUI 下自动启用）
+(use-package org-modern
+  :if (display-graphic-p)
+  :hook ((org-mode . org-modern-mode)
+         (org-agenda-finalize . org-modern-agenda))
+  :config
+  (setq org-modern-hide-stars nil
+        org-modern-star 'replace
+        org-modern-todo t
+        org-modern-keyword "‣ "
+        org-modern-horizontal-rule t
+        org-modern-table t
+        ;; 优先级 / 标签 / 块名徽标化（agenda 与 org buffer 同时生效）
+        org-modern-priority t
+        org-modern-tag t
+        org-modern-block-name t))
+
+;;@@ORG-APPEAR 光标进入时自动展开 emphasis/link 标记
+(use-package org-appear
+  :hook (org-mode . org-appear-mode)
+  :config
+  (setq org-appear-autoemphasis t
+        org-appear-autolinks t
+        org-appear-autosubmarkers t
+        org-appear-autoentities t
+        org-appear-autokeywords t
+        org-appear-delay 0.3))
+
+;;@@TOC-ORG 自动维护 :TOC: 目录，适合 README
+(use-package toc-org
+  :hook (org-mode . toc-org-mode))
+
+;;@@DIRED-HIST dired 目录历史 l/r 前进后退（对齐 help/info/eww 惯例）
+;; 接管 dired 原有的 l (dired-do-redisplay) 与 r (wdired) 两键
+(use-package dired-hist
+  :hook (dired-mode . dired-hist-mode)
+  :config
+  (keymap-set dired-mode-map "l" #'dired-hist-go-back)
+  (keymap-set dired-mode-map "r" #'dired-hist-go-forward))
+
 ;;@4 一些零散的小函数和设定
 ;;@@ 打开 init 文件
 (defun clw/open-init ()
