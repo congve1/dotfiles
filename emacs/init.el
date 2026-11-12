@@ -3538,8 +3538,9 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
   ;; 一次补全时后台换血（继续用旧缓存，不等待）。
   (defvar-local clw/slime-symbol-cache nil
     "缓存 ((KEY . 时间戳) . 已格式候选)，KEY 为 (连接名 . 包名)。")
-  (defvar clw/slime-symbol-cache-ttl 60
-    "符号缓存保鲜期（秒）；过期后下一次补全触发后台刷新。")
+  (defvar clw/slime-symbol-cache-ttl 30
+    "符号缓存保鲜期（秒）；过期后下一次补全触发后台刷新。
+求值路径另有 :after advice 主动刷新，TTL 只兜住 M-: / eval 特例等旁路。")
   (defun clw/slime--format-cached (triples)
     "把 swank 三元组 (name kind symbol) 做成一次性的候选列表+注解 plist。
 不复制 c-p-c 的 `:company-docsig'——它内部是同步 `slime-eval'，corfu 不消费
@@ -3617,8 +3618,22 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
          (t
           (clw/slime-symbol-cache-update)
           nil)))))
-  ;; 连接建立即预热首个 REPL 的缓存，消掉“首次补全慢一拍”
+  ;; 连接建立即预热：connected-hook 运行时的 current buffer 常是
+  ;; *inferior-lisp* 而非 REPL，REPL 甚至可能尚未创建——所以除了就地预热，
+  ;; 再挂 slime-repl-mode-hook，保证每个 REPL 创建即拉取自己的缓存
   (add-hook 'slime-connected-hook #'clw/slime-symbol-cache-update)
+  (add-hook 'slime-repl-mode-hook #'clw/slime-symbol-cache-update)
+  ;; 求值后主动刷新：swank 的请求循环是单线程 FIFO，紧随求值请求之后发出的
+  ;; completions 必然排在其后执行，因此 :after 里直接发异步刷新是顺序安全的
+  ;; ——新 defparameter/defun 下一键补全即可见，不用等 TTL。
+  ;; 覆盖 REPL 发送（send-string）与源文件常见求值/编译命令；M-: 等旁路靠 TTL。
+  (defun clw/slime-symbol-cache-maybe-refresh (&rest _)
+    "静默刷新当前 buffer 的符号缓存（未连接等异常时忽略）。"
+    (ignore-errors (clw/slime-symbol-cache-update)))
+  (dolist (fn '(slime-repl-send-string slime-compile-defun slime-compile-region
+                 slime-eval-last-expression slime-compile-file))
+    (when (fboundp fn)
+      (advice-add fn :after #'clw/slime-symbol-cache-maybe-refresh)))
   (setq slime-completion-at-point-functions
         '(slime-filename-completion
           clw/slime-cached-fuzzy-capf
