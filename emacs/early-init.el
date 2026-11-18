@@ -47,6 +47,11 @@
 ;; 后台编译的警告静默处理，避免 *Warnings* 弹窗打断
 (setq native-comp-async-report-warnings-errors 'silent)
 
+;; 抑制 Emacs 31+ 新增的加载期警告：第三方包（iedit、wgrep-test、slime 的
+;; contrib 等）缺 lexical-binding cookie，逐个弹 (files) 警告，纯属噪音。
+;; 只挡这一类，不影响其他警告。
+(add-to-list 'warning-inhibit-types '(files missing-lexbind-cookie))
+
 ;; Suppress "Loading ...done" messages during startup
 (setq inhibit-message-regexps '("^Loading "))
 (setq set-message-functions '(inhibit-message))

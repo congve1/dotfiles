@@ -408,13 +408,15 @@ If in WSL, try to get gateway via system commands."
       (setq url-proxy-services
             `(("http" . ,proxy)
               ("https" . ,proxy)
-              ;; elpa.gnu.org / elpa.nongnu.org 直连：当前代理对这两个域
-              ;; 连接超时（而直连通），否则 elpa.nongnu.org:443 卡死安装。
-              ;; melpa 不走 no_proxy——它走代理更快（实测直连 5s / 代理 2s）。
+              ;; 镜像/官方 ELPA 直连：日常安装走镜像，手动开代理时不让镜像
+              ;; 流量绕行；官方 gnu/nongnu 对当前代理连接超时（直连通），
+              ;; 兜底阶段保持直连。melpa.org 不进 no_proxy——它走代理更快
+              ;; （实测直连 5s / 代理 2s）。
               ;; 只影响 Emacs 内 url 库的请求；git（VC 包 clone）读上面的
               ;; HTTPS_PROXY 环境变量，不受此 no_proxy 影响，仍走代理。
               ("no_proxy" . ,(regexp-opt
-                              '("elpa.gnu.org" "elpa.nongnu.org")))))
+                              '("mirrors.tuna.tsinghua.edu.cn"
+                                "elpa.gnu.org" "elpa.nongnu.org")))))
       (setq clw/proxy-enabled t)
       (message "代理已开启: http://%s（ELPA 直连）" proxy))))
 ;;@@ IGC-IDLE-TIMER
@@ -497,17 +499,28 @@ If in WSL, try to get gateway via system commands."
 ;;@@PACKAGE
 ;; 包源白名单。第三方包可能在 autoload 里擅自
 ;; (add-to-list 'package-archives ...)（如 etaf-install 会加 etaf.top）；
-;; 这些源若走代理不可达，package-refresh-contents 的同步请求会卡死界面。
-;; 故把 package-archives 当白名单：启动后与每次 refresh 前都强制恢复。
-(defvar clw/package-archives
+;; ELPA 包走清华 TUNA 镜像：直连即可，无需代理（之前官方源全程挂代理太慢）。
+;; VC 的 git 包（GitHub）仍需代理，由 clw/install-packages 只在 VC 阶段临时开启。
+;; package-archives 仍是白名单：第三方包可能 add-to-list 追加不可达源，
+;; 启动后与每次 refresh 前都强制恢复为"当前生效的源"。
+(defvar clw/package-archives-mirror
+  '(("melpa" . "https://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")
+    ("nongnu" . "https://mirrors.tuna.tsinghua.edu.cn/elpa/nongnu/")
+    ("gnu" . "https://mirrors.tuna.tsinghua.edu.cn/elpa/gnu/"))
+  "日常安装/刷新用的镜像源，直连即可。")
+(defvar clw/package-archives-official
   '(("melpa" . "https://melpa.org/packages/")
     ("nongnu" . "https://elpa.nongnu.org/nongnu/")
-    ("gnu" . "https://elpa.gnu.org/packages/")))
-(setopt package-archives clw/package-archives)
+    ("gnu" . "https://elpa.gnu.org/packages/"))
+  "官方源兜底：镜像同步滞后（如刚上架的新包）时，配合代理重试一轮。")
+(defvar clw/package-archives-active clw/package-archives-mirror
+  "当前生效的源，`clw/package-archives-reset' 依据它恢复 `package-archives'。
+官方源兜底期间临时指向 official，结束后回到 mirror。")
+(setopt package-archives clw/package-archives-mirror)
 
 (defun clw/package-archives-reset (&rest _)
-  "把 `package-archives' 重置为白名单，剔除第三方包偷偷追加的源。"
-  (setq package-archives (copy-tree clw/package-archives)))
+  "把 `package-archives' 重置为当前生效的源，剔除第三方包偷偷追加的源。"
+  (setq package-archives (copy-tree clw/package-archives-active)))
 
 ;; 启动后清一次：package-activate-all 加载 quickstart 时，etaf-install 之类的
 ;; autoload 会 add-to-list，这里覆盖掉，避免后续 refresh 访问不可达源
@@ -587,29 +600,67 @@ If in WSL, try to get gateway via system commands."
     slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
     ))
 (setopt package-selected-packages clw/package-list)
+(defun clw/package-install-official (packages)
+  "切官方源 + 代理兜底安装 PACKAGES（镜像同步滞后的新包）。
+返回仍失败的 (PKG . ERR) 列表；结束后恢复镜像源，代理若原本未开则关闭。
+官方 gnu/nongnu 域在 `clw/proxy-toggle' 的 no_proxy 里保持直连。"
+  (let ((proxy-was-off (not clw/proxy-enabled))
+        (remaining nil))
+    (when proxy-was-off
+      (message "[clw] 官方源兜底需要代理，自动开启...")
+      (clw/proxy-toggle))
+    (unwind-protect
+        (progn
+          ;; 官方源沿用 melpa/gnu/nongnu 三个名字：archive-contents 缓存按
+          ;; 名字覆盖，装完恢复镜像同名源即可，无需清理
+          (setopt package-archives clw/package-archives-official)
+          (setq clw/package-archives-active clw/package-archives-official)
+          (package-refresh-contents)
+          (dolist (pkg packages)
+            (condition-case err
+                (progn
+                  (package-install pkg)
+                  (message "[clw] 官方源装上: %s" pkg))
+              (error
+               (push (cons pkg err) remaining)
+               (message "[clw] 官方源仍失败: %s (%S)" pkg err)))))
+      ;; 回到镜像源：active 也要恢复，否则 refresh 前的 advice 一直用官方
+      (setq clw/package-archives-active clw/package-archives-mirror)
+      (setopt package-archives clw/package-archives-mirror)
+      (when (and proxy-was-off clw/proxy-enabled)
+        (message "[clw] 官方源兜底完成，自动关闭代理...")
+        (clw/proxy-toggle)))
+    remaining))
+
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
 Run after changing `clw/package-list' or `package-vc-selected-packages'.
 
-自动管理代理：若代理未开启，会在安装前开启并在结束后关闭；若已开启，则
-保持不动。
+ELPA 包走镜像直连，全程不碰代理；镜像同步滞后缺包时自动切官方源 + 代理
+重试一轮（`clw/package-install-official'）。VC 的 git 包必须走代理：该
+阶段若代理未开则临时开启，装完恢复原状；若原本已开启则保持不动。
 
 单包用 condition-case 兜底，避免 Emacs master 上 tar-mode cl-assert
 （bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
-package-install 手动重试即可。有失败包时会自动刷新索引并重试一次（新上架
-包可能不在本地索引缓存里）。"
+package-install 手动重试即可。有失败包时会先刷新镜像索引重试一次，仍失败
+再走官方源兜底。"
   (interactive)
   ;; 兜底初始化（仅未初始化时调用；已初始化时再调会触发
   ;; "Unnecessary call to package-initialize" 警告）
   (unless (bound-and-true-p package--initialized)
     (package-initialize))
-  (let ((proxy-was-off (not clw/proxy-enabled))
-        (failed-packages nil))
-    (when proxy-was-off
-      (message "[clw] 安装前自动开启代理...")
-      (clw/proxy-toggle))
+  (let ((failed-packages nil))
     (unwind-protect
-        (progn
+        ;; 安装期间临时置 package-quickstart 为 nil：package-install 成功后
+        ;; 每次都触发 package--quickstart-maybe-refresh，quickstart 开着时会
+        ;; 全量重建缓存并 byte-compile（首轮 ~50 个包就重建 ~50 次），且其
+        ;; package-quickstart-refresh 无条件调 package-initialize，init 阶段
+        ;; （after-init-time 未设、已初始化）每装一包就报一次
+        ;; "Unnecessary call to package-initialize" 警告。置 nil 后每次安装
+        ;; 只删缓存文件，由下方 cleanup 统一重建一次（cleanup 在此 let 动态
+        ;; 作用域之外执行，读到的仍是全局真值 t）。
+        (let ((package-quickstart nil))
+          ;; ---- ELPA 阶段：镜像直连，不动代理 ----
           (dolist (pkg clw/package-list)
             (unless (package-installed-p pkg)
               (condition-case err
@@ -617,7 +668,7 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                 (error
                  (push (cons pkg err) failed-packages)
                  (message "[clw] Package %s install failed: %S" pkg err)))))
-          ;; 失败包大多是新上架包不在本地索引缓存里：刷新索引后重试一次
+          ;; 失败包多为镜像索引滞后或本地缓存过期：先刷新镜像索引重试一次
           (when failed-packages
             (package-refresh-contents)
             (dolist (entry failed-packages)
@@ -628,15 +679,29 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                       (setq failed-packages (delq entry failed-packages))
                       (message "[clw] 重试成功: %s" pkg))
                   (error
-                   (message "[clw] 重试仍失败: %s (%S)" pkg err))))))
+                   (message "[clw] 重试仍失败: %s (%S)" pkg err)))))
+            ;; 仍失败 → 官方源 + 代理兜底（镜像同步滞后的新包只能从官方拿）
+            (when failed-packages
+              (setq failed-packages
+                    (clw/package-install-official
+                     (mapcar #'car failed-packages)))))
+          ;; ---- VC 阶段：git clone 走代理，原本未开则临时开启 ----
           ;; custom.el 可能存有旧 vc 列表（load-theme 会把它回套进 live 值），
           ;; 安装只认 init.el 快照
           (setq package-vc-selected-packages clw/package-vc-truth)
-          (condition-case err
-              (package-vc-install-selected-packages)
-            (error
-             (push (cons 'package-vc err) failed-packages)
-             (message "[clw] package-vc-install failed: %S" err)))
+          (let ((proxy-was-off (not clw/proxy-enabled)))
+            (when proxy-was-off
+              (message "[clw] VC 包需要代理，自动开启...")
+              (clw/proxy-toggle))
+            (unwind-protect
+                (condition-case err
+                    (package-vc-install-selected-packages)
+                  (error
+                   (push (cons 'package-vc err) failed-packages)
+                   (message "[clw] package-vc-install failed: %S" err)))
+              (when (and proxy-was-off clw/proxy-enabled)
+                (message "[clw] VC 包安装完成，自动关闭代理...")
+                (clw/proxy-toggle))))
           (if failed-packages
               (message "[clw] 安装失败的包（共 %d 个）: %s"
                        (length failed-packages)
@@ -675,48 +740,48 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
       ;; 会报 "Unnecessary call" 警告；临时绑定 after-init-time 让该条件不成立。
       (when (bound-and-true-p package-quickstart)
         (let ((after-init-time (or after-init-time (current-time))))
-          (package-quickstart-refresh)))
-      (when (and proxy-was-off clw/proxy-enabled)
-        (message "[clw] 安装完成，自动关闭代理...")
-        (clw/proxy-toggle)))))
+          (package-quickstart-refresh))))))
 
 (defun clw/update-packages ()
-  "更新所有包：刷新源 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
+  "更新所有包：刷新镜像 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
 
 `clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如 project-x）装完后不会自动升级，本命令补上更新通道：
-1. `package-refresh-contents' 刷新源索引；
-2. `package-upgrade-all' 升级全部已安装的 ELPA 包；
-3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包。
-
-代理管理逻辑同 `clw/install-packages'：若代理未开启，会在更新前
-开启并在结束后关闭；若已开启，则保持不动。"
+1. `package-refresh-contents' 刷新镜像索引；
+2. `package-upgrade-all' 升级全部已安装的 ELPA 包（镜像直连，不动代理）；
+3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包
+   （git 拉取需代理：若代理未开则临时开启，更新完恢复原状）。"
   (interactive)
-  (let ((proxy-was-off (not clw/proxy-enabled)))
-    (when proxy-was-off
-      (message "[clw] 更新前自动开启代理...")
-      (clw/proxy-toggle))
-    (unwind-protect
-        (progn
+  (unwind-protect
+      (progn
+        ;; ELPA 更新走镜像直连，不碰代理；更新期间不重建 quickstart，
+        ;; 结束后统一刷新一次
+        (let ((package-quickstart nil))
           (package-refresh-contents)
           (condition-case err
               (package-upgrade-all)
             (error
-             (message "[clw] package-upgrade-all failed: %S" err)))
-          (dolist (spec package-vc-selected-packages)
-            (let ((pkg (car spec)))
-              (condition-case err
-                  (progn
-                    (message "[clw] Updating %s..." pkg)
-                    (package-vc-update pkg))
-                (error
-                 (message "[clw] Package %s update failed: %S" pkg err)))))
-          (message "[clw] 所有包更新完成"))
-      ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
-      (when (bound-and-true-p package-quickstart)
-        (package-quickstart-refresh))
-      (when (and proxy-was-off clw/proxy-enabled)
-        (message "[clw] 更新完成，自动关闭代理...")
-        (clw/proxy-toggle)))))
+             (message "[clw] package-upgrade-all failed: %S" err))))
+        ;; VC 更新走代理，原本未开则临时开启
+        (let ((proxy-was-off (not clw/proxy-enabled)))
+          (when proxy-was-off
+            (message "[clw] VC 包更新需要代理，自动开启...")
+            (clw/proxy-toggle))
+          (unwind-protect
+              (dolist (spec package-vc-selected-packages)
+                (let ((pkg (car spec)))
+                  (condition-case err
+                      (progn
+                        (message "[clw] Updating %s..." pkg)
+                        (package-vc-update pkg))
+                    (error
+                     (message "[clw] Package %s update failed: %S" pkg err)))))
+            (when (and proxy-was-off clw/proxy-enabled)
+              (message "[clw] VC 包更新完成，自动关闭代理...")
+              (clw/proxy-toggle))))
+        (message "[clw] 所有包更新完成"))
+    ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
+    (when (bound-and-true-p package-quickstart)
+      (package-quickstart-refresh))))
 
 (defun clw/package-missing-p ()
   "Return non-nil if any selected package is missing."
@@ -3176,8 +3241,12 @@ This differs from Avy's goto-char-timer in how it processes parens."
   :bind ("C-S-c C-S-c" . iedit-mode)
   :init
   ;; iedit 默认把 C-; 绑到全局，会覆盖 eldoc-box-help-at-point 的绑定，
-  ;; 置 nil 取消其默认全局键，只用上面自定义的键进入
-  (setopt iedit-toggle-key-default nil))
+  ;; 置 nil 取消其默认全局键，只用上面自定义的键进入。
+  ;; 用 setq 而非 setopt：setopt 会把值挂进 custom 的延迟检查队列，iedit.el
+  ;; 加载时补做类型检查，报 "Value does not match ... type 'vector': nil"
+  ;; 警告；setq 不走 custom 机制，defcustom 声明时保留已绑定的 nil
+  ;; （iedit.el:300 对 nil 自行跳过默认全局绑定）。
+  (setq iedit-toggle-key-default nil))
 ;;@@ move-dup 一键复制当前行 / 区域，或将行/区域向上/向下移动。
 (use-package move-dup
   :bind
