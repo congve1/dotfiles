@@ -743,6 +743,16 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;; 内部有 (unless package--initialized (package-initialize)) 兜底，不会重复初始化。
 (when (clw/package-missing-p)
   (clw/install-packages))
+;; load-theme 会把 custom.el 持久化的两个包列表经 user theme 回套到 live 值。
+;; 安装的执行时机已从 startup 提前到此处，包不缺失时 install 的 cleanup 不跑，
+;; 故在 startup 末尾无条件重设一次，保证 live 值始终是 init.el 真值。
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq package-vc-selected-packages clw/package-vc-truth)
+            (setopt package-selected-packages
+                    (delete-dups
+                     (append clw/package-list
+                             (mapcar #'car clw/package-vc-truth))))))
 
 ;;@@DIMINISH 放在最前面
 ;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
