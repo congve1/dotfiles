@@ -520,6 +520,230 @@ If in WSL, try to get gateway via system commands."
 ;; "Unnecessary call to package-initialize" 警告；
 ;; 完整初始化兜底已移入 clw/install-packages。
 (require  'use-package)
+;;@3 外部安装的 elisp 包
+;;@@ 指定需要安装的包
+;; 自动安装的唯一事实源是这个独立变量，而非 package-selected-packages：
+;; custom.el 会把 package-selected-packages 存进 user theme，load-theme 时重新
+;; 应用并覆盖下面的 setopt——只改 init.el 新加的包会被冲掉，自动安装检测不到。
+;; 故检测/安装都遍历 clw/package-list；setopt 仅为 package-install/autoremove 服务。
+(defvar clw/package-list
+  '(;; 安装的包列表
+    markdown-mode ; 提供 emacs 中的 markdown 支持
+    ace-window ; 窗口字母标号跳转（M-o，替代 winum）
+    ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
+    avy ; 快速跳转（M-j 输入字符序列跳转）
+    pyim ; 拼音输入法
+    pyim-basedict ; pyim 依赖项
+    popup ; pyim 依赖项
+    vertico ; M-x 补全
+    marginalia
+    eldoc-box ; 提供悬浮的 eldoc 补全
+    vundo ; 可视化 undo，undo-tree 的替代品
+    magit ; 强大的 git UI
+    fussy ; 模糊补全 + fzf 打分排序（替代 orderless）
+    consult ; 异步查询框架
+    consult-eglot
+    wgrep ; 基于 grep 的批量替换工具
+    dired-hist ; dired 目录历史导航（l/r）
+    diminish ; 让某些 mode 标识不在 modeline 显示
+    ;;yasnippet ; 强大的代码模板工具
+    breadcrumb ; 面包屑导航
+    embark ; DWIM 工具
+    embark-consult
+    popper ; 类似 popwin 但更好用
+    expreg ; 类似 expand-region，但更好
+    corfu ; corfu 补全前端，company 的替代品
+    tempel ; 代码模板引擎
+    eglot-tempel ; eglot LSP snippet 桥接 tempel
+    cape ; 为 corfu 提供一些后端
+    envrc ; 类似 buffer-env
+    p-search ; 某种搜索工具
+    doom-themes
+    rainbow-delimiters
+    highlight-escape-sequences
+    iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
+    move-dup
+    symbol-overlay
+    ws-butler
+    diff-hl
+    mixed-pitch
+    verb
+    paredit
+    puni
+    aggressive-indent
+    apheleia
+    jinx
+    highlight-quoted
+    org-modern ; org-mode 现代化外观
+    org-appear ; 光标进入自动展开 emphasis/link 标记
+    toc-org ; 自动维护 :TOC: 目录
+    slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
+    ))
+(setopt package-selected-packages clw/package-list)
+(defun clw/install-packages ()
+  "Install/refresh all selected packages (ELPA + VC).
+Run after changing `clw/package-list' or `package-vc-selected-packages'.
+
+自动管理代理：若代理未开启，会在安装前开启并在结束后关闭；若已开启，则
+保持不动。
+
+单包用 condition-case 兜底，避免 Emacs master 上 tar-mode cl-assert
+（bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
+package-install 手动重试即可。有失败包时会自动刷新索引并重试一次（新上架
+包可能不在本地索引缓存里）。"
+  (interactive)
+  ;; 兜底初始化（仅未初始化时调用；已初始化时再调会触发
+  ;; "Unnecessary call to package-initialize" 警告）
+  (unless (bound-and-true-p package--initialized)
+    (package-initialize))
+  (let ((proxy-was-off (not clw/proxy-enabled))
+        (failed-packages nil))
+    (when proxy-was-off
+      (message "[clw] 安装前自动开启代理...")
+      (clw/proxy-toggle))
+    (unwind-protect
+        (progn
+          (dolist (pkg clw/package-list)
+            (unless (package-installed-p pkg)
+              (condition-case err
+                  (package-install pkg)
+                (error
+                 (push (cons pkg err) failed-packages)
+                 (message "[clw] Package %s install failed: %S" pkg err)))))
+          ;; 失败包大多是新上架包不在本地索引缓存里：刷新索引后重试一次
+          (when failed-packages
+            (package-refresh-contents)
+            (dolist (entry failed-packages)
+              (let ((pkg (car entry)))
+                (condition-case err
+                    (progn
+                      (package-install pkg)
+                      (setq failed-packages (delq entry failed-packages))
+                      (message "[clw] 重试成功: %s" pkg))
+                  (error
+                   (message "[clw] 重试仍失败: %s (%S)" pkg err))))))
+          ;; custom.el 可能存有旧 vc 列表（load-theme 会把它回套进 live 值），
+          ;; 安装只认 init.el 快照
+          (setq package-vc-selected-packages clw/package-vc-truth)
+          (condition-case err
+              (package-vc-install-selected-packages)
+            (error
+             (push (cons 'package-vc err) failed-packages)
+             (message "[clw] package-vc-install failed: %S" err)))
+          (if failed-packages
+              (message "[clw] 安装失败的包（共 %d 个）: %s"
+                       (length failed-packages)
+                       (mapconcat (lambda (p) (symbol-name (car p)))
+                                  (nreverse failed-packages) ", "))
+            (message "[clw] 所有包安装成功")))
+      ;; `package-selected-packages' 会被 custom.el 在 load-theme 时覆盖，
+      ;; 这里同步成 init.el 的最终值（ELPA 列表 + package-vc 包名）并写回
+      ;; custom.el，保持两处一致；漏掉 vc 包名会让 package-autoremove 误删。
+      ;; 同理把 vc 列表本身也持久化为 init 真值：package-vc.el:791 曾写入的
+      ;; 旧副本一旦被 custom.el 加载/主题套用回套，持久化后即与真值相等，
+      ;; 覆盖变为无害。
+      ;; 用 condition-case 兜底：cleanup 里即使 custom-file 不可写也不能中断，
+      ;; 否则后面的 quickstart 刷新和关闭代理都不会执行。
+      (condition-case err
+          (progn
+            (customize-save-variable
+             'package-selected-packages
+             (delete-dups (append clw/package-list
+                                  (mapcar #'car clw/package-vc-truth))))
+            (customize-save-variable 'package-vc-selected-packages
+                                     clw/package-vc-truth))
+        (error (message "[clw] 同步 package-selected-packages 失败：%s"
+                        (error-message-string err))))
+      ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
+      (when (bound-and-true-p package-quickstart)
+        (package-quickstart-refresh))
+      (when (and proxy-was-off clw/proxy-enabled)
+        (message "[clw] 安装完成，自动关闭代理...")
+        (clw/proxy-toggle)))))
+
+(defun clw/update-packages ()
+  "更新所有包：刷新源 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
+
+`clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如 project-x）装完后不会自动升级，本命令补上更新通道：
+1. `package-refresh-contents' 刷新源索引；
+2. `package-upgrade-all' 升级全部已安装的 ELPA 包；
+3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包。
+
+代理管理逻辑同 `clw/install-packages'：若代理未开启，会在更新前
+开启并在结束后关闭；若已开启，则保持不动。"
+  (interactive)
+  (let ((proxy-was-off (not clw/proxy-enabled)))
+    (when proxy-was-off
+      (message "[clw] 更新前自动开启代理...")
+      (clw/proxy-toggle))
+    (unwind-protect
+        (progn
+          (package-refresh-contents)
+          (condition-case err
+              (package-upgrade-all)
+            (error
+             (message "[clw] package-upgrade-all failed: %S" err)))
+          (dolist (spec package-vc-selected-packages)
+            (let ((pkg (car spec)))
+              (condition-case err
+                  (progn
+                    (message "[clw] Updating %s..." pkg)
+                    (package-vc-update pkg))
+                (error
+                 (message "[clw] Package %s update failed: %S" pkg err)))))
+          (message "[clw] 所有包更新完成"))
+      ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
+      (when (bound-and-true-p package-quickstart)
+        (package-quickstart-refresh))
+      (when (and proxy-was-off clw/proxy-enabled)
+        (message "[clw] 更新完成，自动关闭代理...")
+        (clw/proxy-toggle)))))
+
+(defun clw/package-missing-p ()
+  "Return non-nil if any selected package is missing."
+  (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
+               clw/package-list)
+      (cl-some (lambda (spec)
+                 (not (file-directory-p
+                       (expand-file-name (symbol-name (car spec))
+                                         package-user-dir))))
+               package-vc-selected-packages)))
+;;@@ 安装来自 git 仓库的包
+(setopt package-vc-selected-packages
+        '(
+          (persistent-cached-load-filter
+           :url "https://github.com/include-yy/persistent-cached-load-filter")
+          (project-x :url "https://github.com/vmargb/project-x")
+          ;; 加速 magit：单次 porcelain 缓存替代重 diff（默认拉最新提交，
+          ;; 等价 use-package 的 :rev :newest；package-vc spec 不支持 :rev）
+          (magit-fast :url "https://github.com/zHaOdANiuu/magit-fast")
+          ;; fzf-native：fussy 用的 C 原生模糊打分；包内 bin/ 带各平台预编译
+          ;; 动态库（Linux/Windows/macOS），走 module-load，无需本地编译
+          (fzf-native :url "https://github.com/dangduc/fzf-native"
+                      :files ("*.el" "bin"))
+          )
+        )
+;; 快照 init.el 真值：package-vc.el:791 一旦把 vc 列表写进 custom.el，
+;; load-theme 会经 user theme 把 custom.el 里的旧拷贝重新套用到 live 值。
+(defvar clw/package-vc-truth nil
+  "init.el 定义的 `package-vc-selected-packages' 权威值，防 custom.el 旧值回套。")
+(setq clw/package-vc-truth package-vc-selected-packages)
+;; `package-autoremove'（内部 `package--removable-packages'）只保护
+;; `package-selected-packages' 及其传递依赖；vc 检出位于 package-user-dir 内、
+;; 且 project-x 这类元包没有下游依赖者，不并入就会被误删。上面按
+;; clw/package-list 单独 setopt 的是合并前值，这里作为最终值覆盖。
+(setopt package-selected-packages
+        (delete-dups
+         (append clw/package-list
+                 (mapcar #'car clw/package-vc-truth))))
+
+;; 包系统已在 init.el 之前自动初始化（early-init 保持 enable-at-startup t）。
+;; 首启缺包时同步补装：让后续所有 use-package 的 :hook/:autoload
+;; 指向真实文件，避免 jinx/corfu 等在缺包时报错。clw/install-packages
+;; 内部有 (unless package--initialized (package-initialize)) 兜底，不会重复初始化。
+(when (clw/package-missing-p)
+  (clw/install-packages))
+
 ;;@@DIMINISH 放在最前面
 ;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
 ;; 不再 :pin "gnu"：:pin 在宏展开时会 require package（进而 require browse-url），
@@ -1822,240 +2046,6 @@ Lisp function does not specify a special indentation."
        (setq this-command 'clw/hs-global-show))
       (_ (hs-hide-all)))))
 
-;;@3 外部安装的 elisp 包
-;;@@ 指定需要安装的包
-;; 自动安装的唯一事实源是这个独立变量，而非 package-selected-packages：
-;; custom.el 会把 package-selected-packages 存进 user theme，load-theme 时重新
-;; 应用并覆盖下面的 setopt——只改 init.el 新加的包会被冲掉，自动安装检测不到。
-;; 故检测/安装都遍历 clw/package-list；setopt 仅为 package-install/autoremove 服务。
-(defvar clw/package-list
-  '(;; 安装的包列表
-    markdown-mode ; 提供 emacs 中的 markdown 支持
-    ace-window ; 窗口字母标号跳转（M-o，替代 winum）
-    ghostel ; 基于 Ghostty VT 引擎的终端（Windows 原生可用）
-    avy ; 快速跳转（M-j 输入字符序列跳转）
-    pyim ; 拼音输入法
-    pyim-basedict ; pyim 依赖项
-    popup ; pyim 依赖项
-    vertico ; M-x 补全
-    marginalia
-    eldoc-box ; 提供悬浮的 eldoc 补全
-    vundo ; 可视化 undo，undo-tree 的替代品
-    magit ; 强大的 git UI
-    fussy ; 模糊补全 + fzf 打分排序（替代 orderless）
-    consult ; 异步查询框架
-    consult-eglot
-    wgrep ; 基于 grep 的批量替换工具
-    dired-hist ; dired 目录历史导航（l/r）
-    diminish ; 让某些 mode 标识不在 modeline 显示
-    ;;yasnippet ; 强大的代码模板工具
-    breadcrumb ; 面包屑导航
-    embark ; DWIM 工具
-    embark-consult
-    popper ; 类似 popwin 但更好用
-    expreg ; 类似 expand-region，但更好
-    corfu ; corfu 补全前端，company 的替代品
-    tempel ; 代码模板引擎
-    eglot-tempel ; eglot LSP snippet 桥接 tempel
-    cape ; 为 corfu 提供一些后端
-    envrc ; 类似 buffer-env
-    p-search ; 某种搜索工具
-    doom-themes
-    rainbow-delimiters
-    highlight-escape-sequences
-    iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
-    move-dup
-    symbol-overlay
-    ws-butler
-    diff-hl
-    mixed-pitch
-    verb
-    paredit
-    puni
-    aggressive-indent
-    apheleia
-    jinx
-    highlight-quoted
-    org-modern ; org-mode 现代化外观
-    org-appear ; 光标进入自动展开 emphasis/link 标记
-    toc-org ; 自动维护 :TOC: 目录
-    slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
-    ))
-(setopt package-selected-packages clw/package-list)
-(defun clw/install-packages ()
-  "Install/refresh all selected packages (ELPA + VC).
-Run after changing `clw/package-list' or `package-vc-selected-packages'.
-
-自动管理代理：若代理未开启，会在安装前开启并在结束后关闭；若已开启，则
-保持不动。
-
-单包用 condition-case 兜底，避免 Emacs master 上 tar-mode cl-assert
-（bug#78636 / #79280）中断整批安装；失败的包会在最后统一打印，稍后 M-x
-package-install 手动重试即可。有失败包时会自动刷新索引并重试一次（新上架
-包可能不在本地索引缓存里）。"
-  (interactive)
-  ;; 兜底初始化（仅未初始化时调用；已初始化时再调会触发
-  ;; "Unnecessary call to package-initialize" 警告）
-  (unless (bound-and-true-p package--initialized)
-    (package-initialize))
-  (let ((proxy-was-off (not clw/proxy-enabled))
-        (failed-packages nil))
-    (when proxy-was-off
-      (message "[clw] 安装前自动开启代理...")
-      (clw/proxy-toggle))
-    (unwind-protect
-        (progn
-          (dolist (pkg clw/package-list)
-            (unless (package-installed-p pkg)
-              (condition-case err
-                  (package-install pkg)
-                (error
-                 (push (cons pkg err) failed-packages)
-                 (message "[clw] Package %s install failed: %S" pkg err)))))
-          ;; 失败包大多是新上架包不在本地索引缓存里：刷新索引后重试一次
-          (when failed-packages
-            (package-refresh-contents)
-            (dolist (entry failed-packages)
-              (let ((pkg (car entry)))
-                (condition-case err
-                    (progn
-                      (package-install pkg)
-                      (setq failed-packages (delq entry failed-packages))
-                      (message "[clw] 重试成功: %s" pkg))
-                  (error
-                   (message "[clw] 重试仍失败: %s (%S)" pkg err))))))
-          ;; custom.el 可能存有旧 vc 列表（load-theme 会把它回套进 live 值），
-          ;; 安装只认 init.el 快照
-          (setq package-vc-selected-packages clw/package-vc-truth)
-          (condition-case err
-              (package-vc-install-selected-packages)
-            (error
-             (push (cons 'package-vc err) failed-packages)
-             (message "[clw] package-vc-install failed: %S" err)))
-          (if failed-packages
-              (message "[clw] 安装失败的包（共 %d 个）: %s"
-                       (length failed-packages)
-                       (mapconcat (lambda (p) (symbol-name (car p)))
-                                  (nreverse failed-packages) ", "))
-            (message "[clw] 所有包安装成功")))
-      ;; `package-selected-packages' 会被 custom.el 在 load-theme 时覆盖，
-      ;; 这里同步成 init.el 的最终值（ELPA 列表 + package-vc 包名）并写回
-      ;; custom.el，保持两处一致；漏掉 vc 包名会让 package-autoremove 误删。
-      ;; 同理把 vc 列表本身也持久化为 init 真值：package-vc.el:791 曾写入的
-      ;; 旧副本一旦被 custom.el 加载/主题套用回套，持久化后即与真值相等，
-      ;; 覆盖变为无害。
-      ;; 用 condition-case 兜底：cleanup 里即使 custom-file 不可写也不能中断，
-      ;; 否则后面的 quickstart 刷新和关闭代理都不会执行。
-      (condition-case err
-          (progn
-            (customize-save-variable
-             'package-selected-packages
-             (delete-dups (append clw/package-list
-                                  (mapcar #'car clw/package-vc-truth))))
-            (customize-save-variable 'package-vc-selected-packages
-                                     clw/package-vc-truth))
-        (error (message "[clw] 同步 package-selected-packages 失败：%s"
-                        (error-message-string err))))
-      ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
-      (when (bound-and-true-p package-quickstart)
-        (package-quickstart-refresh))
-      (when (and proxy-was-off clw/proxy-enabled)
-        (message "[clw] 安装完成，自动关闭代理...")
-        (clw/proxy-toggle)))))
-
-(defun clw/update-packages ()
-  "更新所有包：刷新源 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
-
-`clw/install-packages' 只补装缺失的包，`package-vc' 安装的包（如 project-x）装完后不会自动升级，本命令补上更新通道：
-1. `package-refresh-contents' 刷新源索引；
-2. `package-upgrade-all' 升级全部已安装的 ELPA 包；
-3. 逐个 `package-vc-update' 更新 `package-vc-selected-packages' 中的包。
-
-代理管理逻辑同 `clw/install-packages'：若代理未开启，会在更新前
-开启并在结束后关闭；若已开启，则保持不动。"
-  (interactive)
-  (let ((proxy-was-off (not clw/proxy-enabled)))
-    (when proxy-was-off
-      (message "[clw] 更新前自动开启代理...")
-      (clw/proxy-toggle))
-    (unwind-protect
-        (progn
-          (package-refresh-contents)
-          (condition-case err
-              (package-upgrade-all)
-            (error
-             (message "[clw] package-upgrade-all failed: %S" err)))
-          (dolist (spec package-vc-selected-packages)
-            (let ((pkg (car spec)))
-              (condition-case err
-                  (progn
-                    (message "[clw] Updating %s..." pkg)
-                    (package-vc-update pkg))
-                (error
-                 (message "[clw] Package %s update failed: %S" pkg err)))))
-          (message "[clw] 所有包更新完成"))
-      ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
-      (when (bound-and-true-p package-quickstart)
-        (package-quickstart-refresh))
-      (when (and proxy-was-off clw/proxy-enabled)
-        (message "[clw] 更新完成，自动关闭代理...")
-        (clw/proxy-toggle)))))
-
-(defun clw/package-missing-p ()
-  "Return non-nil if any selected package is missing."
-  (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
-               clw/package-list)
-      (cl-some (lambda (spec)
-                 (not (file-directory-p
-                       (expand-file-name (symbol-name (car spec))
-                                         package-user-dir))))
-               package-vc-selected-packages)))
-;;@@ 安装来自 git 仓库的包
-(setopt package-vc-selected-packages
-        '(
-          (persistent-cached-load-filter
-           :url "https://github.com/include-yy/persistent-cached-load-filter")
-          (project-x :url "https://github.com/vmargb/project-x")
-          ;; 加速 magit：单次 porcelain 缓存替代重 diff（默认拉最新提交，
-          ;; 等价 use-package 的 :rev :newest；package-vc spec 不支持 :rev）
-          (magit-fast :url "https://github.com/zHaOdANiuu/magit-fast")
-          ;; fzf-native：fussy 用的 C 原生模糊打分；包内 bin/ 带各平台预编译
-          ;; 动态库（Linux/Windows/macOS），走 module-load，无需本地编译
-          (fzf-native :url "https://github.com/dangduc/fzf-native"
-                      :files ("*.el" "bin"))
-          )
-        )
-;; 快照 init.el 真值：package-vc.el:791 一旦把 vc 列表写进 custom.el，
-;; load-theme 会经 user theme 把 custom.el 里的旧拷贝重新套用到 live 值。
-(defvar clw/package-vc-truth nil
-  "init.el 定义的 `package-vc-selected-packages' 权威值，防 custom.el 旧值回套。")
-(setq clw/package-vc-truth package-vc-selected-packages)
-;; `package-autoremove'（内部 `package--removable-packages'）只保护
-;; `package-selected-packages' 及其传递依赖；vc 检出位于 package-user-dir 内、
-;; 且 project-x 这类元包没有下游依赖者，不并入就会被误删。上面按
-;; clw/package-list 单独 setopt 的是合并前值，这里作为最终值覆盖。
-(setopt package-selected-packages
-        (delete-dups
-         (append clw/package-list
-                 (mapcar #'car clw/package-vc-truth))))
-
-;; 包自动安装移到 startup 末尾：此时 after-init-time 已设置，
-;; install/refresh 内部的 package-initialize 不会再触发
-;; "Unnecessary call" 警告（init 阶段调用会触发）
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (when (clw/package-missing-p)
-              (clw/install-packages))))
-;; 无条件 startup 末尾重设：doom-themes :init 的 load-theme 在合并 setopt 之后
-;; 运行，会把 custom.el 持久化的旧值经 user theme 回套进这两个变量；
-;; 包不缺失时 install-packages（及其 cleanup 持久化）不执行，仅靠这里兜底。
-(add-hook 'emacs-startup-hook
-          (lambda ()
-            (setq package-vc-selected-packages clw/package-vc-truth)
-            (setopt package-selected-packages
-                    (delete-dups
-                     (append clw/package-list
-                             (mapcar #'car clw/package-vc-truth))))))
 ;;@@ theme
 ;; 保持 doom-oksolar-light。曾试 modus-operandi-tinted：入口文件虽只 92 行，
 ;; 但会 require-theme 'modus-themes 并生成 2371 个 face（约为 doom 的 2 倍），
