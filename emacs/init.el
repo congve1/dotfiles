@@ -407,9 +407,16 @@ If in WSL, try to get gateway via system commands."
         (setenv var (format "http://%s" proxy)))
       (setq url-proxy-services
             `(("http" . ,proxy)
-              ("https" . ,proxy)))
+              ("https" . ,proxy)
+              ;; elpa.gnu.org / elpa.nongnu.org 直连：当前代理对这两个域
+              ;; 连接超时（而直连通），否则 elpa.nongnu.org:443 卡死安装。
+              ;; melpa 不走 no_proxy——它走代理更快（实测直连 5s / 代理 2s）。
+              ;; 只影响 Emacs 内 url 库的请求；git（VC 包 clone）读上面的
+              ;; HTTPS_PROXY 环境变量，不受此 no_proxy 影响，仍走代理。
+              ("no_proxy" . ,(regexp-opt
+                              '("elpa.gnu.org" "elpa.nongnu.org")))))
       (setq clw/proxy-enabled t)
-      (message "代理已开启: http://%s" proxy))))
+      (message "代理已开启: http://%s（ELPA 直连）" proxy))))
 ;;@@ IGC-IDLE-TIMER
 ;; 在 Emacs 空闲时 GC
 (when (fboundp #'igc-collect)
