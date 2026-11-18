@@ -661,9 +661,21 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
                                      clw/package-vc-truth))
         (error (message "[clw] 同步 package-selected-packages 失败：%s"
                         (error-message-string err))))
-      ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效
+      ;; 本次会话立即激活新装的包：安装若发生在 init 阶段，包系统的初始化
+      ;; （含 quickstart）早已完成，新包的 autoload 不在本次会话里，直接
+      ;; require 会报 "Cannot open load file"（如 pyim-basedict）。把包目录
+      ;; 加入 load-path 并 load 其 autoload 文件，让本次启动就能用。
+      (dolist (dir (directory-files package-user-dir t "\\`[^.]"))
+        (when (file-directory-p dir)
+          (add-to-list 'load-path dir)
+          (dolist (af (directory-files dir t "-autoloads\\.el\\'"))
+            (load af nil t))))
+      ;; 包列表变化后刷新 quickstart 缓存，否则新包的 autoload 下次启动不生效。
+      ;; refresh 内部会调 package-initialize，init 阶段（after-init-time 未设）
+      ;; 会报 "Unnecessary call" 警告；临时绑定 after-init-time 让该条件不成立。
       (when (bound-and-true-p package-quickstart)
-        (package-quickstart-refresh))
+        (let ((after-init-time (or after-init-time (current-time))))
+          (package-quickstart-refresh)))
       (when (and proxy-was-off clw/proxy-enabled)
         (message "[clw] 安装完成，自动关闭代理...")
         (clw/proxy-toggle)))))
