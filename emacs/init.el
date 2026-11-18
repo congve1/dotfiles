@@ -527,7 +527,9 @@ If in WSL, try to get gateway via system commands."
 ;; package-archive-priorities 已把 gnu 排最高，无需显式 pin。
 ;; 不加 :ensure：diminish 已在 clw/package-list，由 clw/install-packages 负责安装；
 ;; :ensure t 会在 init 阶段（startup hook 之前）触发安装，网络异常时会阻塞启动。
-(use-package diminish)
+;; :defer：与其他外部包同范式（见 fussy）——缺包时不急切 require、不中断启动，
+;; 让 startup 的自动安装补上；装好后 autoload 就绪，:diminish 关键字生效。
+(use-package diminish :defer t)
 ;;@@DISPLAY-LINE-NUMBERS 显示行号
 (setopt line-number-display-limit
         (* 1024 1024))
@@ -2059,6 +2061,11 @@ package-install 手动重试即可。有失败包时会自动刷新索引并重�
 ;; 但会 require-theme 'modus-themes 并生成 2371 个 face（约为 doom 的 2 倍），
 ;; 冷启动 load-theme 实测 ~79ms，比 doom 的 ~50ms 还慢，故不采用。
 (use-package doom-themes
+  ;; 全新机器首启包未装：:init 的 load-theme 会报 "Unable to find theme
+  ;; file"，其后的 macro expansion（require 包）也会失败，两者都截断
+  ;; init.el、让 startup 自动安装到不了。用 :when 整块跳过，装好后下次
+  ;; 启动自动生效。与 diminish/fussy 同属"缺包不阻塞启动"范式。
+  :when (package-installed-p 'doom-themes)
   :functions clw/load-theme
   :init (clw/load-theme 'doom-oksolar-light)
   :config
@@ -2439,6 +2446,10 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
   (pyim-default-scheme 'microsoft-shuangpin))
 ;;@@ VERTICO 更好的 icomplete 和 ido
 (use-package vertico
+  ;; 全新机器首启包未装：本块只有 :config，macro expansion 会急切
+  ;; (require 'vertico) 并报错截断 init.el。用 :when 整块跳过，装好后
+  ;; 下次启动自动生效。与 diminish/doom-themes 同范式。
+  :when (package-installed-p 'vertico)
   :config
   (vertico-mode 1)
   (setopt vertico-resize nil)
@@ -3164,22 +3175,71 @@ This differs from Avy's goto-char-timer in how it processes parens."
          ("M-n" . symbol-overlay-jump-next)
          ("M-p" . symbol-overlay-jump-prev)))
 
+;;@@ MSYS2 路径（Windows 下 jinx 的工具链/DLL 来源）
+(defcustom clw/msys2-root nil
+  "MSYS2 安装根目录，如 \"D:/msys64\"。
+Windows 下 jinx 需要它提供 gcc/pkg-config 来编译 enchant，以及运行期
+libenchant-2 等 DLL。非 Windows 或未安装 MSYS2 时保持 nil。
+设为 nil 时自动探测常见安装位置；探测不到会在首次启动时提示配置。"
+  :type '(choice (const :tag "自动探测" nil) directory)
+  :group 'clw)
+
+(defcustom clw/msys2-asked nil
+  "是否已经就 `clw/msys2-root' 询问过用户（避免每次启动都问）。
+设为 t 后不再自动提示；需改路径时 M-x customize-variable RET clw/msys2-root。"
+  :type 'boolean
+  :group 'clw)
+
+(defun clw/msys2--resolve-root ()
+  "返回可用的 MSYS2 根目录：用户配置优先，否则探测常见位置。"
+  (or (and clw/msys2-root
+           (file-directory-p (expand-file-name "ucrt64/bin" clw/msys2-root))
+           clw/msys2-root)
+      (seq-find (lambda (dir)
+                  (and dir (file-directory-p (expand-file-name "ucrt64/bin" dir))))
+                (list (getenv "MSYS2_ROOT")
+                      "C:/msys64" "D:/msys64"
+                      (and (getenv "SystemDrive")
+                           (concat (getenv "SystemDrive") "/msys64"))))))
+
+(defun clw/msys2--setup (root)
+  "把 ROOT 的 ucrt64 工具链纳入 Emacs 进程环境（不改系统 PATH）。"
+  (let ((bin (expand-file-name "ucrt64/bin" root))
+        (pc  (expand-file-name "ucrt64/lib/pkgconfig" root)))
+    (add-to-list 'exec-path bin)                      ; gcc/cc/pkg-config 可被发现
+    (when (file-exists-p (expand-file-name "enchant-2.pc" pc))
+      (setenv "PKG_CONFIG_PATH" pc))                  ; enchant-2 头文件/链接参数
+    (setenv "PATH" (concat (getenv "PATH") ";" bin)))) ; libenchant-2/glib DLL
+
+(defun clw/msys2--maybe-prompt ()
+  "首次 Windows 启动且探测不到 MSYS2 时，让用户手选安装目录并记住。
+在 idle 中调用，不阻塞启动；用户取消（C-g）也记为已问过，只问一次。"
+  (when (and sys/win32p
+             (not clw/msys2-asked)
+             (not (clw/msys2--resolve-root)))
+    (let ((dir (condition-case nil
+                   (read-directory-name
+                    "未找到 MSYS2，输入安装目录（如 D:/msys64，留空跳过）: "
+                    nil nil t)
+                 (quit nil))))
+      (when (and dir
+                 (file-directory-p (expand-file-name "ucrt64/bin" dir)))
+        (customize-save-variable 'clw/msys2-root dir)
+        (clw/msys2--setup dir))
+      (customize-save-variable 'clw/msys2-asked t))))
+
 ;;@@ jinx 新一代实时拼写检查器
 (use-package jinx
   :hook (emacs-startup . global-jinx-mode)
   :bind ("M-$" . jinx-correct)
   :custom (jinx-languages "en_US")
   :init
-  ;; —— jinx 编译/运行环境：仅 Windows 且 msys2 目录存在时生效；
-  ;;    全部限定在 Emacs 进程内，不改 Windows 系统/用户 PATH ——
+  ;; MSYS2 工具链：Windows 下若已配置/探测到就纳入 Emacs 进程环境；探测
+  ;; 不到则首次启动空闲期提示一次（clw/msys2--maybe-prompt），不阻塞启动。
   (when sys/win32p
-    (when (file-directory-p "D:/msys64/ucrt64/bin")
-      (add-to-list 'exec-path "D:/msys64/ucrt64/bin")   ; gcc/cc/pkg-config 可被发现
-      ;; pkg-config 定位 enchant-2（头文件 + 链接参数）
-      (when (file-exists-p "D:/msys64/ucrt64/lib/pkgconfig/enchant-2.pc")
-        (setenv "PKG_CONFIG_PATH" "D:/msys64/ucrt64/lib/pkgconfig"))
-      ;; 运行期 DLL 搜索：libenchant-2 + glib 系列（追加末尾，不遮蔽其他工具）
-      (setenv "PATH" (concat (getenv "PATH") ";D:/msys64/ucrt64/bin"))))
+    (when-let ((root (clw/msys2--resolve-root)))
+      (clw/msys2--setup root))
+    (run-with-idle-timer 3 nil #'clw/msys2--maybe-prompt))
   :config (add-to-list 'jinx-exclude-regexps '(t "\\cc")))
 ;;@@ ws-butler
 (use-package ws-butler
