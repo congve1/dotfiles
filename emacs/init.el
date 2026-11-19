@@ -694,11 +694,34 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
               (message "[clw] VC 包需要代理，自动开启...")
               (clw/proxy-toggle))
             (unwind-protect
-                (condition-case err
-                    (package-vc-install-selected-packages)
-                  (error
-                   (push (cons 'package-vc err) failed-packages)
-                   (message "[clw] package-vc-install failed: %S" err)))
+                (progn
+                  ;; 逐包安装 + 单包容错 + 失败重试一轮：
+                  ;; package-vc-install-selected-packages 整批共用一个错误
+                  ;; 出口，第一个包 clone 失败（网络抖动等）会让其余 VC 包
+                  ;; 全部跳过，表现为"VC 包无法安装"。这里逐包兜底，单包
+                  ;; 失败只影响自身。
+                  (let ((pending package-vc-selected-packages)
+                        (round 1))
+                    (while (and pending (<= round 2))
+                      (let (retry)
+                        (dolist (spec pending)
+                          (let ((pkg (car spec)))
+                            (condition-case err
+                                (if (package-get-descriptor pkg 'installed
+                                                             #'package-vc-p)
+                                    (message "[clw] VC 包已装: %s" pkg)
+                                  (package-vc-install spec)
+                                  (message "[clw] VC 包装上: %s" pkg))
+                              (error
+                               (if (= round 1)
+                                   (message "[clw] VC 包 %s 安装失败: %S，重试..."
+                                            pkg err)
+                                 (push (cons pkg err) failed-packages)
+                                 (message "[clw] VC 包 %s 重试仍失败: %S"
+                                          pkg err))
+                               (setq retry (cons spec retry))))))
+                        (setq pending (nreverse retry)
+                              round (1+ round))))))
               (when (and proxy-was-off clw/proxy-enabled)
                 (message "[clw] VC 包安装完成，自动关闭代理...")
                 (clw/proxy-toggle))))
