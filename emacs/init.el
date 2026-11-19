@@ -388,37 +388,71 @@ If in WSL, try to get gateway via system commands."
 (defvar clw/proxy-enabled nil
   "是否已启用本地代理环境变量。默认不开启，用 `clw/proxy-toggle' 手动开关。")
 
+(defun clw/proxy--addr ()
+  "代理地址 \"gateway:port\"。"
+  (format "%s:%s" (clw/get-default-gateway) clw/proxy-port))
+
+(defun clw/proxy--port-reachable-p ()
+  "探测代理端口能否建立 TCP 连接（诊断代理软件未运行/端口不符）。"
+  (let* ((addr (clw/proxy--addr))
+         (host (file-name-nondirectory addr))
+         (port (string-to-number (file-name-nondirectory addr))))
+    (condition-case nil
+        (let ((buf (generate-new-buffer " *clw-proxy-probe*")))
+          (unwind-protect
+              (progn
+                (delete-process
+                 (open-network-stream "clw-proxy-probe" buf host port))
+                t)
+            (when (buffer-live-p buf) (kill-buffer buf))))
+      (error nil))))
+
+(defun clw/proxy-on ()
+  "开启本地代理环境变量（幂等，已开启时仅重印状态）。
+设置 HTTP_PROXY/HTTPS_PROXY 及 `url-proxy-services'；ELPA 官方源在
+no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开启前探测
+代理端口，不通时直接提示根因（代理软件未运行/端口不符）。"
+  (let ((proxy (clw/proxy--addr)))
+    (if clw/proxy-enabled
+        (message "[clw] 代理本已开启: http://%s" proxy)
+      (if (clw/proxy--port-reachable-p)
+          (message "[clw] 代理端口探测: %s 可达" proxy)
+        (message "[clw] 警告: 代理端口 %s 不可达——代理软件未运行或端口不是 %d"
+                 proxy clw/proxy-port)))
+    (dolist (var '("HTTP_PROXY" "HTTPS_PROXY" "http_proxy" "https_proxy"))
+      (setenv var (format "http://%s" proxy)))
+    (setq url-proxy-services
+          `(("http" . ,proxy)
+            ("https" . ,proxy)
+            ;; 镜像/官方 ELPA 直连：日常安装走镜像，手动开代理时不让镜像
+            ;; 流量绕行；官方 gnu/nongnu 对当前代理连接超时（直连通），
+            ;; 兜底阶段保持直连。melpa.org 不进 no_proxy——它走代理更快
+            ;; （实测直连 5s / 代理 2s）。
+            ;; 只影响 Emacs 内 url 库的请求；git（VC 包 clone）读上面的
+            ;; HTTPS_PROXY 环境变量，不受此 no_proxy 影响，仍走代理。
+            ("no_proxy" . ,(regexp-opt
+                            '("mirrors.tuna.tsinghua.edu.cn"
+                              "elpa.gnu.org" "elpa.nongnu.org")))))
+    (setq clw/proxy-enabled t)
+    (message "[clw] 代理已开启: http://%s（ELPA 直连）" proxy)
+    proxy))
+
+(defun clw/proxy-off ()
+  "关闭本地代理环境变量（幂等）。"
+  (if clw/proxy-enabled
+      (progn
+        (dolist (var '("HTTP_PROXY" "HTTPS_PROXY" "http_proxy" "https_proxy"))
+          (setenv var nil))
+        (setq url-proxy-services nil)
+        (setq clw/proxy-enabled nil)
+        (message "[clw] 代理已关闭"))
+    (message "[clw] 代理本已关闭")))
+
 (defun clw/proxy-toggle ()
-  "切换本地代理环境变量的开启/关闭。
-开启时用 `clw/get-default-gateway' 获取网关地址，端口取 `clw/proxy-port'，
-设置 HTTP_PROXY/HTTPS_PROXY 及 `url-proxy-services'；关闭时清空这些变量。
+  "切换本地代理环境变量的开启/关闭（按当前状态翻转）。
 需自行确保代理软件已在运行并监听 `clw/proxy-port'。"
   (interactive)
-  (let* ((gateway (clw/get-default-gateway))
-         (proxy (format "%s:%s" gateway clw/proxy-port)))
-    (if clw/proxy-enabled
-        (progn
-          (dolist (var '("HTTP_PROXY" "HTTPS_PROXY" "http_proxy" "https_proxy"))
-            (setenv var nil))
-          (setq url-proxy-services nil)
-          (setq clw/proxy-enabled nil)
-          (message "代理已关闭"))
-      (dolist (var '("HTTP_PROXY" "HTTPS_PROXY" "http_proxy" "https_proxy"))
-        (setenv var (format "http://%s" proxy)))
-      (setq url-proxy-services
-            `(("http" . ,proxy)
-              ("https" . ,proxy)
-              ;; 镜像/官方 ELPA 直连：日常安装走镜像，手动开代理时不让镜像
-              ;; 流量绕行；官方 gnu/nongnu 对当前代理连接超时（直连通），
-              ;; 兜底阶段保持直连。melpa.org 不进 no_proxy——它走代理更快
-              ;; （实测直连 5s / 代理 2s）。
-              ;; 只影响 Emacs 内 url 库的请求；git（VC 包 clone）读上面的
-              ;; HTTPS_PROXY 环境变量，不受此 no_proxy 影响，仍走代理。
-              ("no_proxy" . ,(regexp-opt
-                              '("mirrors.tuna.tsinghua.edu.cn"
-                                "elpa.gnu.org" "elpa.nongnu.org")))))
-      (setq clw/proxy-enabled t)
-      (message "代理已开启: http://%s（ELPA 直连）" proxy))))
+  (if clw/proxy-enabled (clw/proxy-off) (clw/proxy-on)))
 ;;@@ IGC-IDLE-TIMER
 ;; 在 Emacs 空闲时 GC
 (when (fboundp #'igc-collect)
@@ -603,12 +637,12 @@ If in WSL, try to get gateway via system commands."
 (defun clw/package-install-official (packages)
   "切官方源 + 代理兜底安装 PACKAGES（镜像同步滞后的新包）。
 返回仍失败的 (PKG . ERR) 列表；结束后恢复镜像源，代理若原本未开则关闭。
-官方 gnu/nongnu 域在 `clw/proxy-toggle' 的 no_proxy 里保持直连。"
+官方 gnu/nongnu 域在 `clw/proxy-on' 的 no_proxy 里保持直连。"
   (let ((proxy-was-off (not clw/proxy-enabled))
         (remaining nil))
     (when proxy-was-off
       (message "[clw] 官方源兜底需要代理，自动开启...")
-      (clw/proxy-toggle))
+      (clw/proxy-on))
     (unwind-protect
         (progn
           ;; 官方源沿用 melpa/gnu/nongnu 三个名字：archive-contents 缓存按
@@ -629,7 +663,7 @@ If in WSL, try to get gateway via system commands."
       (setopt package-archives clw/package-archives-mirror)
       (when (and proxy-was-off clw/proxy-enabled)
         (message "[clw] 官方源兜底完成，自动关闭代理...")
-        (clw/proxy-toggle)))
+        (clw/proxy-off)))
     remaining))
 
 (defun clw/install-packages ()
@@ -691,8 +725,10 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
           (setq package-vc-selected-packages clw/package-vc-truth)
           (let ((proxy-was-off (not clw/proxy-enabled)))
             (when proxy-was-off
-              (message "[clw] VC 包需要代理，自动开启...")
-              (clw/proxy-toggle))
+              (message "[clw] VC 阶段需要代理，自动开启...")
+              (clw/proxy-on))
+            (message "[clw] VC 阶段代理状态: enabled=%S HTTPS_PROXY=%S"
+                     clw/proxy-enabled (getenv "HTTPS_PROXY"))
             (unwind-protect
                 (progn
                   ;; 逐包安装 + 单包容错 + 失败重试一轮：
@@ -703,15 +739,29 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                   (let ((pending package-vc-selected-packages)
                         (round 1))
                     (while (and pending (<= round 2))
-                      (let (retry)
+                      (let ((retry nil))
                         (dolist (spec pending)
                           (let ((pkg (car spec)))
                             (condition-case err
-                                (if (package-get-descriptor pkg 'installed
-                                                             #'package-vc-p)
-                                    (message "[clw] VC 包已装: %s" pkg)
+                                (cond
+                                 ;; 已装（descriptor 为 vc 包）跳过
+                                 ((package-get-descriptor pkg 'installed
+                                                          #'package-vc-p)
+                                  (message "[clw] VC 包已装: %s" pkg))
+                                 ;; clone 失败残留的空壳目录（无 .el）：
+                                 ;; git 拒绝 clone 到已存在目录，先清掉
+                                 ((clw/vc-package-missing-p pkg)
+                                  (let ((dir (expand-file-name
+                                              (symbol-name pkg)
+                                              package-user-dir)))
+                                    (when (file-directory-p dir)
+                                      (message "[clw] 清理残留空壳目录: %s" dir)
+                                      (delete-directory dir t nil)))
                                   (package-vc-install spec)
                                   (message "[clw] VC 包装上: %s" pkg))
+                                 (t
+                                  (package-vc-install spec)
+                                  (message "[clw] VC 包装上: %s" pkg)))
                               (error
                                (if (= round 1)
                                    (message "[clw] VC 包 %s 安装失败: %S，重试..."
@@ -719,12 +769,14 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                                  (push (cons pkg err) failed-packages)
                                  (message "[clw] VC 包 %s 重试仍失败: %S"
                                           pkg err))
-                               (setq retry (cons spec retry))))))
+                               (setq retry (cons spec retry)))))))
                         (setq pending (nreverse retry)
-                              round (1+ round))))))
+                              round (1+ round)))))
               (when (and proxy-was-off clw/proxy-enabled)
-                (message "[clw] VC 包安装完成，自动关闭代理...")
-                (clw/proxy-toggle))))
+                (message "[clw] VC 阶段安装完成，关闭代理...")
+                (clw/proxy-off))
+              (message "[clw] VC 阶段结束，代理状态: enabled=%S"
+                       clw/proxy-enabled)))
           (if failed-packages
               (message "[clw] 安装失败的包（共 %d 个）: %s"
                        (length failed-packages)
@@ -788,7 +840,7 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
         (let ((proxy-was-off (not clw/proxy-enabled)))
           (when proxy-was-off
             (message "[clw] VC 包更新需要代理，自动开启...")
-            (clw/proxy-toggle))
+            (clw/proxy-on))
           (unwind-protect
               (dolist (spec package-vc-selected-packages)
                 (let ((pkg (car spec)))
@@ -800,7 +852,7 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                      (message "[clw] Package %s update failed: %S" pkg err)))))
             (when (and proxy-was-off clw/proxy-enabled)
               (message "[clw] VC 包更新完成，自动关闭代理...")
-              (clw/proxy-toggle))))
+              (clw/proxy-off))))
         (message "[clw] 所有包更新完成"))
     ;; 更新后包的 autoload 可能变化，同步刷新 quickstart 缓存
     (when (bound-and-true-p package-quickstart)
@@ -811,10 +863,17 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
   (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
                clw/package-list)
       (cl-some (lambda (spec)
-                 (not (file-directory-p
-                       (expand-file-name (symbol-name (car spec))
-                                         package-user-dir))))
+                 (clw/vc-package-missing-p (car spec)))
                package-vc-selected-packages)))
+
+(defun clw/vc-package-missing-p (pkg)
+  "判断 VC 包 PKG 是否缺失。
+clone 失败会留下没有 .el 文件的空壳目录（如 project-x 只剩空目录），
+仅凭 `file-directory-p' 会把空壳误判为已装、永不重装；这里要求目录里
+至少存在一个 .el 文件才算已装。"
+  (let ((dir (expand-file-name (symbol-name pkg) package-user-dir)))
+    (or (not (file-directory-p dir))
+        (null (directory-files dir nil "\\.el\\'" t)))))
 ;;@@ 安装来自 git 仓库的包
 (setopt package-vc-selected-packages
         '(
