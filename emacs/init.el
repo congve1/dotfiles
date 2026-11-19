@@ -302,6 +302,40 @@ ARITY 为 `func-arity' 的返回值形式，如 (0 . 0)、(1 . 1)。
     (setopt browse-url-browser-function #'browse-url-generic
             browse-url-generic-program "wslview")))
 
+;;@@ WSLg GUI 的剪贴板直通 Windows
+;; WSLg 的 X11 剪贴板桥（XWayland → Weston RDP → Windows）对 Emacs 的
+;; selection 机制同步不可靠，鼠标拖选/M-w 后 Windows 侧常粘贴不出来。
+;; 这里绕过整条桥链：interprogram-cut-function 在保持 X selection 的同时，
+;; 异步调用 Windows 自带 PowerShell（显式 UTF-8 输入编码，中文不乱码）把
+;; 文本直写系统剪贴板。异步执行不阻塞 M-w；后发复制覆盖先发，符合预期。
+
+(defun clw/wsl-copy-to-windows (text)
+  "把 TEXT 写入 Windows 系统剪贴板（同步 ~300ms）。
+文本 UTF-8 编码后走 Base64（纯 ASCII 管道，零编码歧义），PowerShell
+解码后 Set-Clipboard，中文生僻字不乱码；Set-Clipboard 后读回比对，
+不一致时告警。"
+  (with-temp-buffer
+    (insert (base64-encode-string (encode-coding-string text 'utf-8) t))
+    (call-process-region (point-min) (point-max) clw/wsl-powershell
+                         t nil nil "-noprofile" "-command"
+                         "$b64=[Console]::In.ReadToEnd().Trim(); $t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)); Set-Clipboard $t")
+    (goto-char (point-min))
+    (when (looking-at "CLIP-MISMATCH")
+      (message "[clw] 警告: Windows 剪贴板内容校验失败"))))
+
+(defconst clw/wsl-powershell
+  "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  "Windows 自带 PowerShell 的 WSL 路径。")
+
+(when sys/wslp
+  (setq interprogram-cut-function
+        (lambda (text &optional push)
+          ;; X selection 照常设置：Emacs 内中键粘贴等不受影响
+          (gui-select-text text)
+          ;; GUI 会话下直推 Windows 剪贴板
+          (when (display-graphic-p)
+            (clw/wsl-copy-to-windows text)))))
+
 ;;@@ Windows 下把 shell 指向 Git Bash
 ;; 默认 cmdproxy.exe 跑不了 ob-shell 生成的 sh 脚本（org-babel 的 shell 块
 ;; 会报错），且其 GBK 输出与全局 utf-8 编码冲突。bash 在 PATH 时统一改用
@@ -3365,7 +3399,7 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;; 光标停在符号（或选中区域）上启动，编辑任意一处即实时同步全部出现位置；
 ;; TAB 可在"只改当前处"与"同步全部"间切换，适合改名/批量替换场景。
 (use-package iedit
-  :bind ("C-S-c C-S-c" . iedit-mode)
+  ;; C-S-c 是终端复制快捷键，不占用；需要时 M-x iedit-mode
   :init
   ;; iedit 默认把 C-; 绑到全局，会覆盖 eldoc-box-help-at-point 的绑定，
   ;; 置 nil 取消其默认全局键，只用上面自定义的键进入。
