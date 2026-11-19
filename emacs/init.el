@@ -812,6 +812,15 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
         (let ((after-init-time (or after-init-time (current-time))))
           (package-quickstart-refresh))))))))
 
+;; quickstart 开启但缓存文件缺失（被误删/首次重建失败）时重建一次，
+;; 否则每次启动都走慢路径且不会自愈
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (when (and (bound-and-true-p package-quickstart)
+                       (not (file-exists-p package-quickstart-file)))
+              (let ((after-init-time (or after-init-time (current-time))))
+                (package-quickstart-refresh)))))
+
 (defun clw/update-packages ()
   "更新所有包：刷新镜像 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
 
@@ -855,6 +864,10 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
 
 (defun clw/package-missing-p ()
   "Return non-nil if any selected package is missing."
+  ;; 显式 require：本函数用到的 package-get-descriptor（vc 判定）定义在
+  ;; package.el；正常启动时包系统已自动初始化、package.el 必已加载，但
+  ;; quickstart 异常等极端情况下可能中断，这里兜底保证函数可用（幂等）。
+  (require 'package)
   (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
                clw/package-list)
       (cl-some (lambda (spec)
@@ -866,6 +879,7 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
 descriptor 由目录里的 -pkg.el 构建，package.el 只认它。仅凭目录/文件
 存在性判定会把 clone 半成品（有 .el 无 pkg.el）、空壳目录都误判为已装。
 descriptor 缺失的目录无论什么状态，都由安装流程清理后重装。"
+  (require 'package)
   (null (package-get-descriptor pkg 'installed #'package-vc-p)))
 ;;@@ 安装来自 git 仓库的包
 (setopt package-vc-selected-packages
