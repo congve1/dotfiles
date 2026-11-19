@@ -2332,7 +2332,12 @@ Lisp function does not specify a special indentation."
   ;; 后一项只覆盖 :family/:height，不会丢掉前面的颜色。
   (defun nn-mode-line--icon (glyph face)
     "GLYPH rendered in Nerd Font, colored with FACE."
-    (propertize glyph 'face (list face '(:family "Symbols Nerd Font Mono" :height 1.0))))
+    ;; "Symbols Nerd Font Mono" 未单独安装时回退到主字体 Maple Mono NF CN
+    ;; （NF 版自带 Nerd Font 图标字形，PUA 区码位完全一致）。
+    (let ((nf (if (member "Symbols Nerd Font Mono" (font-family-list))
+                  "Symbols Nerd Font Mono"
+                "Maple Mono NF CN")))
+      (propertize glyph 'face (list face (list :family nf :height 1.0)))))
 
   (defconst nn-mode-line--error   (nn-mode-line--icon "\uEA87" 'nn-mode-line-error))
   (defconst nn-mode-line--warning (nn-mode-line--icon "\uEA6C" 'nn-mode-line-warning))
@@ -3461,61 +3466,95 @@ libenchant-2 等 DLL。非 Windows 或未安装 MSYS2 时保持 nil。
     (setenv "PATH" (concat (getenv "PATH") ";" bin)))) ; libenchant-2/glib DLL
 
 (defun clw/msys2--maybe-prompt ()
-  "首次 Windows 启动且探测不到 MSYS2 时，让用户手选安装目录并记住。
-在 idle 中调用，不阻塞启动；用户取消（C-g）也记为已问过，只问一次。"
-  (when (and sys/win32p
-             (not clw/msys2-asked)
-             (not (clw/msys2--resolve-root)))
+  "启动时探测不到 MSYS2 则同步询问一次安装目录并永久记住。
+用户取消（C-g）也记为已问过，之后不再询问；成功时返回 root。"
+  (when (and sys/win32p (not clw/msys2-asked))
     (let ((dir (condition-case nil
                    (read-directory-name
-                    "未找到 MSYS2，输入安装目录（如 D:/msys64，留空跳过）: "
+                    "未找到 MSYS2，输入安装目录（如 D:/msys64，取消跳过）: "
                     nil nil t)
                  (quit nil))))
+      ;; 无论成功与否只问这一次；改路径走 M-x customize-variable clw/msys2-root
+      (customize-save-variable 'clw/msys2-asked t)
       (when (and dir
                  (file-directory-p (expand-file-name "ucrt64/bin" dir)))
         (customize-save-variable 'clw/msys2-root dir)
-        (clw/msys2--setup dir))
-      (customize-save-variable 'clw/msys2-asked t))))
+        dir))))
 
-;;@@ jinx 新一代实时拼写检查器;;@@ Windows 下 msys2 DLL 依赖同步
-;; msys2 gcc 编译的 native module（jinx、fzf-native 等）链接了
-;; ucrt64/bin 里的 lib*.dll；Windows 加载模块时用 Emacs 进程启动时的
-;; PATH 搜索依赖（运行期 setenv 不参与、依赖闭包枚举所需 objdump 新
-;; 环境未必有），找不到即报 could not be opened。方案：module-load 前
-;; 按需把 ucrt64/bin 的全部 lib*.dll 同步到该模块所在目录（幂等），
-;; LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR 即可命中，各目录只同步一次。
+;;@@ jinx 新一代实时拼写检查器;;@@ Windows 下 native module 的 DLL 依赖解析
+;; 实测（emacs-32.0.50 UCRT 构建）：
+;; 1) LoadLibrary 加载 native module 时不搜索模块自身目录，把依赖 DLL
+;;    同步到模块目录无效；也不认运行期 (setenv "PATH")（UCRT 的 putenv
+;;    不写回进程环境块）、不认 exec-path/default-directory。加载器只搜：
+;;    emacs.exe 所在目录（应用目录）、系统目录、进程 cwd、进程启动时的 PATH。
+;; 2) enchant 按 DLL 位置做 prefix 重定位（enchant_set_prefix_dir）：
+;;    libenchant 位于 <emacs>/bin → 前缀 <emacs>，后端与词典分别取
+;;    <emacs>/lib/enchant-2 与 <emacs>/share/hunspell。
+;; 结论：不做任何系统 PATH 修改，全部依赖由 clw/msys2--sync-module-dlls
+;; 在启动时自动同步进 emacs 自身目录树（幂等，msys2 升级后自动跟上），
+;; 永远不需要手动 copy。
 
-(defvar clw/msys2-dll-synced-dirs nil
-  "本会话内已完成 DLL 同步的模块目录。")
+;; 受管文件清单：应用目录下只更新这份名单里的文件（均为本机制复制进去的
+;; 拼写检查依赖），emacs 自带 DLL 一律不碰。硬编码在配置里，不落任何清单文件。
+(defconst clw/msys2--managed-dlls
+  '("libaspell-15.dll"
+    "libenchant-2-2.dll"
+    "libhunspell-1.7-0.dll"
+    "libicudt78.dll"
+    "libicuin78.dll"
+    "libicuio78.dll"
+    "libicutest78.dll"
+    "libicutu78.dll"
+    "libicuuc78.dll"
+    "libnuspell-5.dll"
+    "libpspell-15.dll"
+    "libvoikko-1.dll"))
 
-(defun clw/msys2--sync-dlls-to-dir (dir)
-  "把 msys2 ucrt64/bin 的 lib*.dll 同步到 DIR。幂等：目标存在且
-大小一致则跳过；返回本次复制数。"
-  (when-let* ((bindir (when-let ((root (clw/msys2--resolve-root)))
-                        (expand-file-name "ucrt64/bin" root)))
-              (default-directory dir))
+(defun clw/msys2--copy-newer (src dst)
+  "SRC 与 DST 大小不同或 DST 不存在时覆盖复制。返回是否复制。"
+  (let ((ss (file-attribute-size (file-attributes src)))
+        (ds (and (file-exists-p dst)
+                 (file-attribute-size (file-attributes dst)))))
+    (unless (and ds (= ss ds))
+      (copy-file src dst t))))
+
+(defun clw/msys2--sync-module-dlls ()
+  "把 jinx/enchant 运行期依赖同步进 emacs 自身目录树（幂等）。
+需在首次 module-load 之前调用（jinx 的 :init 里）。"
+  (when-let* ((root (clw/msys2--resolve-root))
+              (bin (expand-file-name "ucrt64/bin" root))
+              ;; invocation-directory 形如 "E:/emacs/bin/"，前缀取其上级
+              (prefix (file-name-directory
+                       (directory-file-name
+                        (directory-file-name invocation-directory)))))
     (let ((n 0))
-      (dolist (dll (directory-files bindir t "\\`lib.*\\.dll\\'" t))
-        (let* ((dst (expand-file-name (file-name-nondirectory dll)))
-               (src-size (file-attribute-size (file-attributes dll)))
-               (dst-size (and (file-exists-p dst)
-                              (file-attribute-size (file-attributes dst)))))
-          (unless (and dst-size (= src-size dst-size))
-            (copy-file dll dst t)
-            (setq n (1+ n)))))
+      ;; 1) 应用目录：名单内的文件有更新则覆盖；缺失的复制；
+      ;;    名单外的（emacs 自带库）一律不碰。
+      (dolist (name clw/msys2--managed-dlls)
+        (when (clw/msys2--copy-newer
+               (expand-file-name name bin)
+               (expand-file-name name invocation-directory))
+          (setq n (1+ n))))
+      ;; 2) enchant 后端（<prefix>/lib/enchant-2，目录整体归本函数管）
+      (let ((dir (expand-file-name "lib/enchant-2" prefix))
+            (src (expand-file-name "ucrt64/lib/enchant-2" root)))
+        (when (file-directory-p src)
+          (make-directory dir t)
+          (dolist (dll (directory-files src t "\\.dll\\'" t))
+            (when (clw/msys2--copy-newer
+                   dll (expand-file-name (file-name-nondirectory dll) dir))
+              (setq n (1+ n))))))
+      ;; 3) 词典（<prefix>/share/hunspell，目录整体归本函数管）
+      (let ((dir (expand-file-name "share/hunspell" prefix))
+            (src (expand-file-name "ucrt64/share/hunspell" root)))
+        (when (file-directory-p src)
+          (make-directory dir t)
+          (dolist (dic (directory-files src t "\\.\\(?:dic\\|aff\\)\\'" t))
+            (when (clw/msys2--copy-newer
+                   dic (expand-file-name (file-name-nondirectory dic) dir))
+              (setq n (1+ n))))))
       (when (> n 0)
-        (message "[clw] 同步 native module 依赖 DLL: %d 个" n))
-      n)))
-
-(defun clw/msys2--maybe-sync-for-module (module-file)
-  "MODULE-FILE 所在目录未同步过时，执行一次 DLL 同步。"
-  (when (stringp module-file)
-    (let ((dir (file-name-directory (expand-file-name module-file))))
-      (unless (member dir clw/msys2-dll-synced-dirs)
-        (push dir clw/msys2-dll-synced-dirs)
-        (clw/msys2--sync-dlls-to-dir dir)))))
-
-(advice-add 'module-load :before #'clw/msys2--maybe-sync-for-module)
+        (message "[clw] msys2 native module 依赖同步: %d 个文件" n)))))
 
 
 (use-package jinx
@@ -3523,12 +3562,15 @@ libenchant-2 等 DLL。非 Windows 或未安装 MSYS2 时保持 nil。
   :bind ("M-$" . jinx-correct)
   :custom (jinx-languages "en_US")
   :init
-  ;; MSYS2 工具链：Windows 下若已配置/探测到就纳入 Emacs 进程环境；探测
-  ;; 不到则首次启动空闲期提示一次（clw/msys2--maybe-prompt），不阻塞启动。
+  ;; MSYS2 位置：custom.el 保存值 / MSYS2_ROOT 环境变量 / 常见位置自动探测；
+  ;; 都没有则启动时同步询问一次并永久记住（之后不再询问）。拿到 root 后：
+  ;;   - clw/msys2--setup      → ucrt64/bin 加入 exec-path（供子进程工具用）
+  ;;   - clw/msys2--sync-module-dlls → 同步 native module 的 DLL 依赖
   (when sys/win32p
-    (when-let ((root (clw/msys2--resolve-root)))
-      (clw/msys2--setup root))
-    (run-with-idle-timer 3 nil #'clw/msys2--maybe-prompt))
+    (when-let ((root (or (clw/msys2--resolve-root)
+                         (clw/msys2--maybe-prompt))))
+      (clw/msys2--setup root)
+      (clw/msys2--sync-module-dlls)))
   :config (add-to-list 'jinx-exclude-regexps '(t "\\cc")))
 ;;@@ ws-butler
 (use-package ws-butler
