@@ -21,7 +21,19 @@
 ;; 这里的赋值用于让安装/删除包时自动重建缓存。
 ;; 注意：增删包后需刷新缓存（已在 `clw/install-packages' 收尾自动做）；
 ;; 手动装包后可运行 M-x package-quickstart-refresh。
+;;
+;; 缓存文件按 system-type 隔离：多台机器共用同一份配置/elpa 目录时
+;; （如 WSL 里的 Linux Emacs 与 Windows 原生 Emacs），quickstart 里嵌入的
+;; autoload 路径是各自平台的绝对路径（d:/... vs /mnt/d/...），共用单文件会
+;; 互相覆盖——一边刷新缓存，另一边启动时所有 autoload 指向死路径，
+;; 表现为各包随机 "Cannot open load file: xxx"。
 (setq package-quickstart t)
+;; gnu/linux 含斜杠，不能直接进文件名
+(setq package-quickstart-file
+      (expand-file-name
+       (format "package-quickstart-%s.el"
+               (replace-regexp-in-string "/" "-" (symbol-name system-type)))
+       user-emacs-directory))
 ;; 暂存 file-name-handler-alist 并在启动期间置空，减少启动期文件查找开销。
 ;; 在 init.el 的 emacs-startup-hook 中恢复（见 GC 配置部分）。
 (defvar clw/init-file-name-handler-alist file-name-handler-alist)

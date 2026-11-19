@@ -604,6 +604,7 @@ no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开�
     breadcrumb ; 面包屑导航
     embark ; DWIM 工具
     embark-consult
+    compat ; embark-consult 的依赖：不会被 package-install 之外的流程自动补装，显式列出防止缺失导致 embark-consult 加载失败
     popper ; 类似 popwin 但更好用
     expreg ; 类似 expand-region，但更好
     corfu ; corfu 补全前端，company 的替代品
@@ -676,7 +677,7 @@ git 拒绝 clone 到已存在目录，残留目录不清会导致重装必败。
     (dolist (spec specs retry)
       (let ((pkg (car spec)))
         (condition-case err
-            (if (package-get-descriptor pkg 'installed #'package-vc-p)
+            (if (clw/vc-installed-p pkg)
                 (message "[clw] VC 包已装: %s" pkg)
               (let ((dir (expand-file-name (symbol-name pkg) package-user-dir)))
                 (when (file-directory-p dir)
@@ -715,9 +716,23 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
         ;; "Unnecessary call to package-initialize" 警告。置 nil 后每次安装
         ;; 只删缓存文件，由下方 cleanup 统一重建一次（cleanup 在此 let 动态
         ;; 作用域之外执行，读到的仍是全局真值 t）。
-        (let ((package-quickstart nil))
+        (let ((package-quickstart nil)
+              (to-install (append clw/package-list nil))
+              (missing-deps nil))
+          ;; ---- 依赖完整性检查：已装包的依赖若被误删（如 compat 从磁盘
+          ;; 消失），package-install 只在装包时解析依赖、不会主动补，这里
+          ;; 并入本次待装列表补齐。只查一级依赖，缺失的装好后依赖链闭合。
+          ;; 不修改全局 clw/package-list（清单应保持 init.el 真值）。
+          (dolist (entry package-alist)
+            (dolist (desc (cdr entry))
+              (dolist (req (package-desc-reqs desc))
+                (unless (or (memq (car req) clw/package-list)
+                            (package-installed-p (car req) (cadr req)))
+                  (message "[clw] 补装缺失依赖: %s (被 %s 依赖)"
+                           (car req) (package-desc-name desc))
+                  (cl-pushnew (car req) missing-deps)))))
           ;; ---- ELPA 阶段：镜像直连，不动代理 ----
-          (dolist (pkg clw/package-list)
+          (dolist (pkg (append (nreverse missing-deps) to-install))
             (unless (package-installed-p pkg)
               (condition-case err
                   (package-install pkg)
@@ -745,7 +760,15 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
           ;; custom.el 可能存有旧 vc 列表（load-theme 会把它回套进 live 值），
           ;; 安装只认 init.el 快照
           (setq package-vc-selected-packages clw/package-vc-truth)
-          (let ((proxy-was-off (not clw/proxy-enabled)))
+          (if (not (executable-find "git"))
+              (progn
+                (message "[clw] 警告: 未找到 git，跳过 VC 包安装。")
+                (message "[clw] Windows 请安装 Git for Windows，并确认其 cmd 目录在系统 PATH 里；装好后重启 Emacs 或 M-x clw/install-packages 补装以下包: %s"
+                         (mapconcat #'symbol-name
+                                    (mapcar #'car clw/package-vc-truth) " "))
+                (dolist (spec package-vc-selected-packages)
+                  (push (cons (car spec) 'git-missing) failed-packages)))
+            (let ((proxy-was-off (not clw/proxy-enabled)))
             (when proxy-was-off
               (message "[clw] VC 阶段需要代理，自动开启...")
               (clw/proxy-on))
@@ -771,7 +794,7 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                 (message "[clw] VC 阶段安装完成，关闭代理...")
                 (clw/proxy-off))
               (message "[clw] VC 阶段结束，代理状态: enabled=%S"
-                       clw/proxy-enabled))
+                       clw/proxy-enabled)))
           (if failed-packages
               (message "[clw] 安装失败的包（共 %d 个）: %s"
                        (length failed-packages)
@@ -864,9 +887,9 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
 
 (defun clw/package-missing-p ()
   "Return non-nil if any selected package is missing."
-  ;; 显式 require：本函数用到的 package-get-descriptor（vc 判定）定义在
+  ;; 显式 require：本函数用到的 package-alist / package-desc-kind 定义在
   ;; package.el；正常启动时包系统已自动初始化、package.el 必已加载，但
-  ;; quickstart 异常等极端情况下可能中断，这里兜底保证函数可用（幂等）。
+  ;; quickstart 异常等极端情况下可能中断，这里兜底保证可用（幂等）。
   (require 'package)
   (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
                clw/package-list)
@@ -874,13 +897,22 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                  (clw/vc-package-missing-p (car spec)))
                package-vc-selected-packages)))
 
-(defun clw/vc-package-missing-p (pkg)
-  "判断 VC 包 PKG 是否缺失：以 package.el 的 descriptor 为准。
-descriptor 由目录里的 -pkg.el 构建，package.el 只认它。仅凭目录/文件
-存在性判定会把 clone 半成品（有 .el 无 pkg.el）、空壳目录都误判为已装。
-descriptor 缺失的目录无论什么状态，都由安装流程清理后重装。"
+(defun clw/vc-installed-p (pkg)
+  "返回非 nil 表示 VC 包 PKG 已安装（kind 为 vc 的 descriptor 存在）。
+判定基于 `package-alist'（package.el 仅在装包时解析依赖、不会主动补），
+只认 kind 为 vc 的条目；空壳/半成品目录没有可用的 vc descriptor。
+不使用 `package-get-descriptor'——它是未公开的内部 API，Emacs 31.1
+的 package.el 里不存在，调用会报 function definition is void。"
   (require 'package)
-  (null (package-get-descriptor pkg 'installed #'package-vc-p)))
+  (let ((descs (cdr (assq pkg package-alist))))
+    (and descs
+         (eq (package-desc-kind (car descs)) 'vc))))
+
+(defun clw/vc-package-missing-p (pkg)
+  "判断 VC 包 PKG 是否缺失：以 package.el 的 vc descriptor 为准。
+clone 半成品（有 .el 无 pkg.el）、空壳目录都没有 vc descriptor，
+统一判缺失，由安装流程清理后重装。"
+  (not (clw/vc-installed-p pkg)))
 ;;@@ 安装来自 git 仓库的包
 (setopt package-vc-selected-packages
         '(
