@@ -3477,74 +3477,47 @@ libenchant-2 等 DLL。非 Windows 或未安装 MSYS2 时保持 nil。
         (clw/msys2--setup dir))
       (customize-save-variable 'clw/msys2-asked t))))
 
-;;@@ jinx 模块依赖 DLL 同步（Windows）
-;; jinx-mod.dll 编译后链接 libenchant-2 等依赖，Windows 的 module-load
-;; 用 Emacs 进程启动时的 PATH 搜索这些依赖 DLL，运行期 `setenv' 无法
-;; 改变自身进程的搜索路径。把依赖闭包复制到模块同目录后，模块加载的
-;; LOAD_WITH_ALTERED_SEARCH_PATH 会优先搜索该目录，加载即可成功。
-(defun clw/msys2--dll-deps (dll-file)
-  "用 objdump 枚举 DLL-FILE 的直接依赖 DLL 名单。"
-  (when (and (executable-find "objdump") (file-exists-p dll-file))
-    (let (deps)
-      (with-temp-buffer
-        (insert (mapconcat #'identity
-                           (process-lines "objdump" "-p" dll-file) "\n"))
-        (goto-char (point-min))
-        (while (re-search-forward "DLL Name: \\(.*\\.dll\\)" nil t)
-          (push (match-string 1) deps)))
-      (nreverse deps))))
+;;@@ jinx 新一代实时拼写检查器;;@@ Windows 下 msys2 DLL 依赖同步
+;; msys2 gcc 编译的 native module（jinx、fzf-native 等）链接了
+;; ucrt64/bin 里的 lib*.dll；Windows 加载模块时用 Emacs 进程启动时的
+;; PATH 搜索依赖（运行期 setenv 不参与、依赖闭包枚举所需 objdump 新
+;; 环境未必有），找不到即报 could not be opened。方案：module-load 前
+;; 按需把 ucrt64/bin 的全部 lib*.dll 同步到该模块所在目录（幂等），
+;; LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR 即可命中，各目录只同步一次。
+
+(defvar clw/msys2-dll-synced-dirs nil
+  "本会话内已完成 DLL 同步的模块目录。")
+
+(defun clw/msys2--sync-dlls-to-dir (dir)
+  "把 msys2 ucrt64/bin 的 lib*.dll 同步到 DIR。幂等：目标存在且
+大小一致则跳过；返回本次复制数。"
+  (when-let* ((bindir (when-let ((root (clw/msys2--resolve-root)))
+                        (expand-file-name "ucrt64/bin" root)))
+              (default-directory dir))
+    (let ((n 0))
+      (dolist (dll (directory-files bindir t "\\`lib.*\\.dll\\'" t))
+        (let* ((dst (expand-file-name (file-name-nondirectory dll)))
+               (src-size (file-attribute-size (file-attributes dll)))
+               (dst-size (and (file-exists-p dst)
+                              (file-attribute-size (file-attributes dst)))))
+          (unless (and dst-size (= src-size dst-size))
+            (copy-file dll dst t)
+            (setq n (1+ n)))))
+      (when (> n 0)
+        (message "[clw] 同步 native module 依赖 DLL: %d 个" n))
+      n)))
+
+(defun clw/msys2--maybe-sync-for-module (module-file)
+  "MODULE-FILE 所在目录未同步过时，执行一次 DLL 同步。"
+  (when (stringp module-file)
+    (let ((dir (file-name-directory (expand-file-name module-file))))
+      (unless (member dir clw/msys2-dll-synced-dirs)
+        (push dir clw/msys2-dll-synced-dirs)
+        (clw/msys2--sync-dlls-to-dir dir)))))
+
+(advice-add 'module-load :before #'clw/msys2--maybe-sync-for-module)
 
 
-(defun clw/msys2--copy-dll-deps (dll-file bindir target seen)
-  "复制 DLL-FILE 的依赖（BINDIR 中存在的）到 TARGET。
-SEEN 为已处理依赖名的哈希表（跨递归共享去重），
-返回本次新复制到 TARGET 的文件路径列表。"
-  (let (copied)
-    (dolist (dep (clw/msys2--dll-deps dll-file))
-      (unless (gethash (downcase dep) seen)
-        (puthash (downcase dep) t seen)
-        (let ((src (expand-file-name dep bindir)))
-          (when (file-exists-p src)
-            (let ((dst (expand-file-name dep target)))
-              (unless (file-exists-p dst)
-                (message "[clw] 同步 jinx 依赖 DLL: %s" dep)
-                (copy-file src dst))
-              (push dst copied))))))
-    (nreverse copied)))
-
-(defun clw/msys2--sync-jinx-dlls ()
-  "把 jinx 模块的依赖 DLL（递归闭包）复制到模块所在目录。
-跳过 msys2 里没有的 DLL（即 Windows 系统自带的）；幂等，已复制的跳过。"
-  (when (and sys/win32p (executable-find "objdump"))
-    (when-let* ((mod (locate-library "jinx-mod" t))
-                (bindir (when-let ((root (clw/msys2--resolve-root)))
-                          (expand-file-name "ucrt64/bin" root)))
-                (target (file-name-directory mod)))
-      (let ((seen (make-hash-table :test 'equal))
-            (queue (list mod))
-            (copied nil))
-        (while queue
-          (let ((dll (pop queue)))
-            (unless (gethash dll seen)
-              (puthash dll t seen)
-              (let ((new-copied (clw/msys2--copy-dll-deps
-                                 dll bindir target seen)))
-                ;; 新复制的依赖继续入队枚举其自身依赖（闭包），
-                ;; 同时记录到 copied 供日志统计
-                (setq copied (append new-copied copied)
-                      queue (append new-copied queue))))))
-        (when copied
-          (message "[clw] 同步 jinx 依赖 DLL: %d 个" (length copied)))))))
-
-;; jinx 模块加载前同步依赖（覆盖"首次编译后立即加载"的场景）
-(advice-add 'module-load :before
-            (lambda (file)
-              (when (and sys/win32p
-                         (string-match-p "jinx-mod" file))
-                (clw/msys2--sync-jinx-dlls)))
-            '((name . "jinx-dll-sync")))
-
-;;@@ jinx 新一代实时拼写检查器
 (use-package jinx
   :hook (emacs-startup . global-jinx-mode)
   :bind ("M-$" . jinx-correct)
