@@ -668,25 +668,22 @@ no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开�
 
 (defun clw/vc-install-round (specs)
   "逐个安装 SPECS 里的 VC 包，返回仍失败的 spec 列表。
-已装的跳过；clone 失败残留的空壳目录（无 .el）先删除再重装。
+已装（descriptor 为 vc 包）的跳过；descriptor 缺失的目录无论什么状态
+（不存在 / 空壳 / 有 .el 但没 -pkg.el 的半成品），一律清理后干净 clone——
+git 拒绝 clone 到已存在目录，残留目录不清会导致重装必败。
 单包 condition-case 兜底：一个包失败不影响其余包。"
   (let (retry)
     (dolist (spec specs retry)
       (let ((pkg (car spec)))
         (condition-case err
-            (cond
-             ((package-get-descriptor pkg 'installed #'package-vc-p)
-              (message "[clw] VC 包已装: %s" pkg))
-             ((clw/vc-package-missing-p pkg)
+            (if (package-get-descriptor pkg 'installed #'package-vc-p)
+                (message "[clw] VC 包已装: %s" pkg)
               (let ((dir (expand-file-name (symbol-name pkg) package-user-dir)))
                 (when (file-directory-p dir)
-                  (message "[clw] 清理残留空壳目录: %s" dir)
+                  (message "[clw] 清理残留目录: %s" dir)
                   (delete-directory dir t nil)))
               (package-vc-install spec)
               (message "[clw] VC 包装上: %s" pkg))
-             (t
-              (package-vc-install spec)
-              (message "[clw] VC 包装上: %s" pkg)))
           (error
            (message "[clw] VC 包 %s 安装失败: %S" pkg err)
            (setq retry (cons spec retry))))))))
@@ -865,13 +862,11 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                package-vc-selected-packages)))
 
 (defun clw/vc-package-missing-p (pkg)
-  "判断 VC 包 PKG 是否缺失。
-clone 失败会留下没有 .el 文件的空壳目录（如 project-x 只剩空目录），
-仅凭 `file-directory-p' 会把空壳误判为已装、永不重装；这里要求目录里
-至少存在一个 .el 文件才算已装。"
-  (let ((dir (expand-file-name (symbol-name pkg) package-user-dir)))
-    (or (not (file-directory-p dir))
-        (null (directory-files dir nil "\\.el\\'" t)))))
+  "判断 VC 包 PKG 是否缺失：以 package.el 的 descriptor 为准。
+descriptor 由目录里的 -pkg.el 构建，package.el 只认它。仅凭目录/文件
+存在性判定会把 clone 半成品（有 .el 无 pkg.el）、空壳目录都误判为已装。
+descriptor 缺失的目录无论什么状态，都由安装流程清理后重装。"
+  (null (package-get-descriptor pkg 'installed #'package-vc-p)))
 ;;@@ 安装来自 git 仓库的包
 (setopt package-vc-selected-packages
         '(
@@ -3231,7 +3226,13 @@ This differs from Avy's goto-char-timer in how it processes parens."
   ;; collect buffer 中按键直接执行对应动作（无需先 embark-act）
   (add-hook 'embark-collect-mode-hook #'embark-collect-direct-action-minor-mode))
 ;;@@EMBARK-CONSULT 联动 embark 与 consult
+;; :after + :demand 是 embark README 官方推荐：embark 与 consult 都加载后
+;; 立即加载本包。embark.el 末尾会在 consult 加载时检查 embark-consult 并
+;; require（noerror），若本包还没加载就触发时序竞争，出现"The package
+;; embark-consult should be installed"警告（真实加载错误会被 noerror 吞掉）。
 (use-package embark-consult
+  :after (embark consult)
+  :demand t
   :hook
   (embark-collect-mode . consult-preview-at-point-mode))
 ;;@@EXPREG 可以使用 tree sitter 的 expand-region
