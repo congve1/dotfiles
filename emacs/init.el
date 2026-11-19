@@ -666,6 +666,31 @@ no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开�
         (clw/proxy-off)))
     remaining))
 
+(defun clw/vc-install-round (specs)
+  "逐个安装 SPECS 里的 VC 包，返回仍失败的 spec 列表。
+已装的跳过；clone 失败残留的空壳目录（无 .el）先删除再重装。
+单包 condition-case 兜底：一个包失败不影响其余包。"
+  (let (retry)
+    (dolist (spec specs retry)
+      (let ((pkg (car spec)))
+        (condition-case err
+            (cond
+             ((package-get-descriptor pkg 'installed #'package-vc-p)
+              (message "[clw] VC 包已装: %s" pkg))
+             ((clw/vc-package-missing-p pkg)
+              (let ((dir (expand-file-name (symbol-name pkg) package-user-dir)))
+                (when (file-directory-p dir)
+                  (message "[clw] 清理残留空壳目录: %s" dir)
+                  (delete-directory dir t nil)))
+              (package-vc-install spec)
+              (message "[clw] VC 包装上: %s" pkg))
+             (t
+              (package-vc-install spec)
+              (message "[clw] VC 包装上: %s" pkg)))
+          (error
+           (message "[clw] VC 包 %s 安装失败: %S" pkg err)
+           (setq retry (cons spec retry))))))))
+
 (defun clw/install-packages ()
   "Install/refresh all selected packages (ELPA + VC).
 Run after changing `clw/package-list' or `package-vc-selected-packages'.
@@ -736,47 +761,20 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
                   ;; 出口，第一个包 clone 失败（网络抖动等）会让其余 VC 包
                   ;; 全部跳过，表现为"VC 包无法安装"。这里逐包兜底，单包
                   ;; 失败只影响自身。
-                  (let ((pending package-vc-selected-packages)
-                        (round 1))
-                    (while (and pending (<= round 2))
-                      (let ((retry nil))
-                        (dolist (spec pending)
-                          (let ((pkg (car spec)))
-                            (condition-case err
-                                (cond
-                                 ;; 已装（descriptor 为 vc 包）跳过
-                                 ((package-get-descriptor pkg 'installed
-                                                          #'package-vc-p)
-                                  (message "[clw] VC 包已装: %s" pkg))
-                                 ;; clone 失败残留的空壳目录（无 .el）：
-                                 ;; git 拒绝 clone 到已存在目录，先清掉
-                                 ((clw/vc-package-missing-p pkg)
-                                  (let ((dir (expand-file-name
-                                              (symbol-name pkg)
-                                              package-user-dir)))
-                                    (when (file-directory-p dir)
-                                      (message "[clw] 清理残留空壳目录: %s" dir)
-                                      (delete-directory dir t nil)))
-                                  (package-vc-install spec)
-                                  (message "[clw] VC 包装上: %s" pkg))
-                                 (t
-                                  (package-vc-install spec)
-                                  (message "[clw] VC 包装上: %s" pkg)))
-                              (error
-                               (if (= round 1)
-                                   (message "[clw] VC 包 %s 安装失败: %S，重试..."
-                                            pkg err)
-                                 (push (cons pkg err) failed-packages)
-                                 (message "[clw] VC 包 %s 重试仍失败: %S"
-                                          pkg err))
-                               (setq retry (cons spec retry)))))))
-                        (setq pending (nreverse retry)
-                              round (1+ round)))))
+                  (let ((failed (clw/vc-install-round
+                                 package-vc-selected-packages)))
+                    (when failed
+                      (message "[clw] VC 失败包重试一轮: %s"
+                               (mapconcat #'symbol-name
+                                          (mapcar #'car failed) " "))
+                      (dolist (spec (clw/vc-install-round failed))
+                        (push (cons (car spec) 'vc-install-failed)
+                              failed-packages))))
               (when (and proxy-was-off clw/proxy-enabled)
                 (message "[clw] VC 阶段安装完成，关闭代理...")
                 (clw/proxy-off))
               (message "[clw] VC 阶段结束，代理状态: enabled=%S"
-                       clw/proxy-enabled)))
+                       clw/proxy-enabled))
           (if failed-packages
               (message "[clw] 安装失败的包（共 %d 个）: %s"
                        (length failed-packages)
@@ -815,7 +813,7 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
       ;; 会报 "Unnecessary call" 警告；临时绑定 after-init-time 让该条件不成立。
       (when (bound-and-true-p package-quickstart)
         (let ((after-init-time (or after-init-time (current-time))))
-          (package-quickstart-refresh))))))
+          (package-quickstart-refresh))))))))
 
 (defun clw/update-packages ()
   "更新所有包：刷新镜像 → 升级 ELPA 包 → 更新 package-vc 安装的 git 包。
