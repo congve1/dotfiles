@@ -925,6 +925,14 @@ package-install 手动重试即可。有失败包时会先刷新镜像索引重�
   ;; package.el；正常启动时包系统已自动初始化、package.el 必已加载，但
   ;; quickstart 异常等极端情况下可能中断，这里兜底保证可用（幂等）。
   (require 'package)
+  ;; package-quickstart 只把各包的 autoload 拼进一个文件，不会填
+  ;; `package-alist'；而 `clw/vc-package-missing-p' 要靠它判 kind=vc，
+  ;; 不补就会把 4 个 VC 包全判成缺失 → 每次启动都跑 clw/install-packages
+  ;; → `package-initialize' 全量激活（实测 ~100ms，还会把 elpa 里的旧版本
+  ;; 目录塞进 load-path，遮蔽 quickstart 选中的新版本）。
+  ;; 只读 *-pkg.el 的 descriptor 即可，实测 ~4ms。
+  (unless package-alist
+    (package-load-all-descriptors))
   (or (cl-some (lambda (pkg) (not (package-installed-p pkg)))
                clw/package-list)
       (cl-some (lambda (spec)
