@@ -33,7 +33,7 @@
 ;; 私有符号契约检查：配置里有几处 :override / :around 直接改写第三方包的
 ;; 私有函数，上游改名或改参数后会「静默」失效（旧 advice 匹配不到、或参数
 ;; 数量不对）。在挂 advice 之前核对函数存在性与参数个数，变了就显式告警，
-;; 而不是等某天 magit / p-search 莫名坏掉才发现。
+;; 而不是等某天 magit / project-x 莫名坏掉才发现。
 (defun clw/func-arity (fn)
   "求 FN 的参数表；function cell 若已被 advice 组合体占据则返回 `advised'。
 Emacs 32 的 advice 组合体是 oclosure（旧版为 special byte-code），组合体
@@ -633,7 +633,6 @@ no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开�
     consult-eglot
     wgrep ; 基于 grep 的批量替换工具
     dired-hist ; dired 目录历史导航（l/r）
-    diminish ; 让某些 mode 标识不在 modeline 显示
     ;;yasnippet ; 强大的代码模板工具
     breadcrumb ; 面包屑导航
     embark ; DWIM 工具
@@ -646,26 +645,19 @@ no_proxy 里保持直连，git（VC 包 clone）读环境变量走代理。开�
     eglot-tempel ; eglot LSP snippet 桥接 tempel
     cape ; 为 corfu 提供一些后端
     envrc ; 类似 buffer-env
-    p-search ; 某种搜索工具
     doom-themes
     rainbow-delimiters
-    highlight-escape-sequences
     iedit ; 批量编辑（替代 multiple-cursors，单套 overlay 实现更快）
     move-dup
     symbol-overlay
     ws-butler
     diff-hl
-    mixed-pitch
-    verb
-    paredit
     puni
     aggressive-indent
     apheleia
     jinx
-    highlight-quoted
     org-modern ; org-mode 现代化外观
     org-appear ; 光标进入自动展开 emphasis/link 标记
-    toc-org ; 自动维护 :TOC: 目录
     slime ; Common Lisp 交互环境（配合 inferior-lisp-program=sbcl）
     ))
 (setopt package-selected-packages clw/package-list)
@@ -1001,16 +993,6 @@ clone 半成品（有 .el 无 pkg.el）、空壳目录都没有 vc descriptor，
                      (append clw/package-list
                              (mapcar #'car clw/package-vc-truth))))))
 
-;;@@DIMINISH 放在最前面
-;; 可以用来取消某些 minor-mode 字符在 modeline 的显示
-;; 不再 :pin "gnu"：:pin 在宏展开时会 require package（进而 require browse-url），
-;; 导致启动日志出现 "Loading browse-url..."；diminish 在 GNU ELPA，
-;; package-archive-priorities 已把 gnu 排最高，无需显式 pin。
-;; 不加 :ensure：diminish 已在 clw/package-list，由 clw/install-packages 负责安装；
-;; :ensure t 会在 init 阶段（startup hook 之前）触发安装，网络异常时会阻塞启动。
-;; :defer：与其他外部包同范式（见 fussy）——缺包时不急切 require、不中断启动，
-;; 让 startup 的自动安装补上；装好后 autoload 就绪，:diminish 关键字生效。
-(use-package diminish :defer t)
 ;;@@DISPLAY-LINE-NUMBERS 显示行号
 (setopt line-number-display-limit
         (* 1024 1024))
@@ -1583,7 +1565,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 (use-package eldoc
   :custom (eldoc-documentation-strategy #'eldoc-documentation-compose)
   :config
-  (eldoc-add-command-completions "paredit-")
+  (eldoc-add-command-completions "puni-")
   ;; 0.5s 平衡响应与多源 compose 策略的 idle 开销
   (setopt eldoc-idle-delay 0.5)
   )
@@ -1891,7 +1873,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
 (setopt show-paren-context-when-offscreen 'overlay)
 ;;@@WHICH-KEY 显示某个按键绑定的 keymap 中的命令
 (use-package which-key
-  :diminish which-key-mode
   ;; which-key.el 约 120KB，原先无 defer 关键字 = 启动期完整加载。
   ;; 改 after-init 钩子启用：setopt 目标变量都没有 autoload cookie（已核实，
   ;; 不会在启动期触发加载），which-key-mode 自带 autoload，首个前缀键前已就绪。
@@ -2034,7 +2015,6 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   :config (temp-buffer-resize-mode))
 ;;@@ info
 (use-package info
-  :hook (Info-mode . mixed-pitch-mode)
   :custom-face (Info-quoted ((t (:inherit fixed-pitch)))))
 ;;@@ elisp
 (use-package elisp-mode
@@ -2044,87 +2024,7 @@ DELIMITED 非 nil 时只替换被词边界包裹的匹配。"
   (keymap-global-set "<remap> <eval-last-sexp>" #'pp-eval-last-sexp)
   ;; Syntax highlighting of known Elisp symbols（Emacs 31+ 内置；
   ;; 30.x 上此变量不存在，设置无效但无害，语义高亮静默缺席）
-  (setq elisp-fontify-semantically t)
-
-  (with-no-warnings
-    ;; Align indent keywords
-    ;; @see https://emacs.stackexchange.com/questions/10230/how-to-indent-keywords-aligned
-    (defun clw/lisp-indent-function (indent-point state)
-      "This function is the normal value of the variable `lisp-indent-function'.
-The function `calculate-lisp-indent' calls this to determine
-if the arguments of a Lisp function call should be indented specially.
-
-INDENT-POINT is the position at which the line being indented begins.
-Point is located at the point to indent under (for default indentation);
-STATE is the `parse-partial-sexp' state for that position.
-
-If the current line is in a call to a Lisp function that has a non-nil
-property `lisp-indent-function' (or the deprecated `lisp-indent-hook'),
-it specifies how to indent.  The property value can be:
-
-* `defun', meaning indent `defun'-style
-  \(this is also the case if there is no property and the function
-  has a name that begins with \"def\", and three or more arguments);
-
-* an integer N, meaning indent the first N arguments specially
-  (like ordinary function arguments), and then indent any further
-  arguments like a body;
-
-* a function to call that returns the indentation (or nil).
-  `lisp-indent-function' calls this function with the same two arguments
-  that it itself received.
-
-This function returns either the indentation to use, or nil if the
-Lisp function does not specify a special indentation."
-      (let ((normal-indent (current-column))
-            (orig-point (point)))
-        (goto-char (1+ (elt state 1)))
-        (parse-partial-sexp (point) calculate-lisp-indent-last-sexp 0 t)
-        (cond
-         ;; car of form doesn't seem to be a symbol, or is a keyword
-         ((and (elt state 2)
-               (or (not (looking-at "\\sw\\|\\s_"))
-                   (looking-at ":")))
-          (unless (> (save-excursion (forward-line 1) (point))
-                     calculate-lisp-indent-last-sexp)
-            (goto-char calculate-lisp-indent-last-sexp)
-            (beginning-of-line)
-            (parse-partial-sexp (point) calculate-lisp-indent-last-sexp 0 t))
-          ;; Indent under the list or under the first sexp on the same
-          ;; line as calculate-lisp-indent-last-sexp.  Note that first
-          ;; thing on that line has to be complete sexp since we are
-          ;; inside the innermost containing sexp.
-          (backward-prefix-chars)
-          (current-column))
-         ((and (save-excursion
-                 (goto-char indent-point)
-                 (skip-syntax-forward " ")
-                 (not (looking-at ":")))
-               (save-excursion
-                 (goto-char orig-point)
-                 (looking-at ":")))
-          (save-excursion
-            (goto-char (+ 2 (elt state 1)))
-            (current-column)))
-         (t
-          (let ((function (buffer-substring (point)
-                                            (progn (forward-sexp 1) (point))))
-                method)
-            (setq method (or (function-get (intern-soft function)
-                                           'lisp-indent-function)
-                             (get (intern-soft function) 'lisp-indent-hook)))
-            (cond ((or (eq method 'defun)
-                       (and (null method)
-                            (length> function 3)
-                            (string-match "\\`def" function)))
-                   (lisp-indent-defform state indent-point))
-                  ((integerp method)
-                   (lisp-indent-specform method state
-                                         indent-point normal-indent))
-                  (method
-                   (funcall method indent-point state))))))))
-
-    (setq lisp-indent-function #'clw/lisp-indent-function)))
+  (setq elisp-fontify-semantically t))
 
 ;;@@ display-fill-column-indicator
 (use-package display-fill-column-indicator
@@ -2311,7 +2211,7 @@ Lisp function does not specify a special indentation."
   ;; 全新机器首启包未装：:init 的 load-theme 会报 "Unable to find theme
   ;; file"，其后的 macro expansion（require 包）也会失败，两者都截断
   ;; init.el、让 startup 自动安装到不了。用 :when 整块跳过，装好后下次
-  ;; 启动自动生效。与 diminish/fussy 同属"缺包不阻塞启动"范式。
+  ;; 启动自动生效。与 fussy 同属"缺包不阻塞启动"范式。
   :when (package-installed-p 'doom-themes)
   :functions clw/load-theme
   :init (clw/load-theme 'doom-oksolar-light)
@@ -2700,7 +2600,7 @@ TUI 下显式关闭 inverse-video，保证与 GUI 观感一致。"
 (use-package vertico
   ;; 全新机器首启包未装：本块只有 :config，macro expansion 会急切
   ;; (require 'vertico) 并报错截断 init.el。用 :when 整块跳过，装好后
-  ;; 下次启动自动生效。与 diminish/doom-themes 同范式。
+  ;; 下次启动自动生效。与 doom-themes 同范式。
   :when (package-installed-p 'vertico)
   :config
   (vertico-mode 1)
@@ -3405,9 +3305,6 @@ This differs from Avy's goto-char-timer in how it processes parens."
 ;;@@ rainbow-delimiters  括号高亮增强包
 (use-package rainbow-delimiters
   :hook (prog-mode . rainbow-delimiters-mode))
-;;@@ highlight-escape-sequences 给字符串和正则里的转义字符（如 \n、\t、\x1b）上色，让你一眼看清哪些字符是“特殊的
-(use-package highlight-escape-sequences
-  :hook (prog-mode . hes-mode))
 ;;@@ iedit 基于 overlay 的高性能批量编辑（替代 multiple-cursors）
 ;; 光标停在符号（或选中区域）上启动，编辑任意一处即实时同步全部出现位置；
 ;; TAB 可在"只改当前处"与"同步全部"间切换，适合改名/批量替换场景。
@@ -3841,34 +3738,9 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
        (t (call-interactively
            (or (command-remapping #'magit-visit-thing)
                #'magit-visit-thing)))))))
-;;@@ mixed pitch 字体混合显示插件
-(use-package mixed-pitch
-  :defer t)
-;;@@ verb
-(use-package verb
-  :after org
-  :bind (:map verb-response-body-mode-map
-         ("q" . kill-buffer-and-window))
-  :bind-keymap ("C-c C-r" . verb-command-map)
-  :init (unbind-key "C-c C-r" org-mode-map))
-;;@@ paredit
-(use-package paredit
-  :hook ((emacs-lisp-mode . enable-paredit-mode)
-         (lisp-mode . enable-paredit-mode))
-  :config
-  (setq paredit-lighter " Par")
-  (dolist (binding '("C-<left>" "C-<right>" "M-s" "M-?"))
-    (keymap-unset paredit-mode-map binding)))
-;;@@ puni
+;;@@ puni 统一接管所有 prog-mode 的结构化编辑（含 Lisp）
 (use-package puni
-  ;; 定义在 :init：hook 执行时 puni 必已加载，命名函数避免重复 lambda
-  :init
-  (defun clw/puni-off () (puni-mode -1))
-  :hook ((prog-mode . puni-mode)
-         ;; .lisp 进 lisp-mode（派生 prog-mode），与 paredit 同时启用会抢
-         ;; 括号编辑按键；paredit 由上面的 :hook 负责，这里排除 puni
-         (emacs-lisp-mode . clw/puni-off)
-         (lisp-mode . clw/puni-off))
+  :hook (prog-mode . puni-mode)
   :bind (:map puni-mode-map
          ("M-(" . puni-wrap-round)
          ("C-(" . puni-slurp-backward)
@@ -3895,8 +3767,7 @@ commit 行 → 该 commit diff；其余（untracked 文件等）回落
 ;; 装好后 M-x slime 起 REPL。
 ;;
 ;; 说明：.lisp 默认进 `lisp-mode'（派生自 prog-mode），上面的
-;; paredit/rainbow-delimiters/corfu 会自动生效；puni 已在自身块里对
-;; lisp-mode 排除，避免与 paredit 抢括号按键。
+;; puni/rainbow-delimiters/corfu 会自动生效。
 ;; 全程 :defer + :commands，启动期不加载 slime、不联网。
 (use-package slime
   :defer t
@@ -4056,11 +3927,17 @@ corfu 的 `corfu-quit-at-boundary' 便没有可退出的时机，弹窗在空格
               #'clw/slime-completion-at-point-safe))
 ;;@@ aggressive-indent
 (use-package aggressive-indent
-  :hook (emacs-lisp-mode . aggressive-indent-mode))
+  :hook ((emacs-lisp-mode . aggressive-indent-mode)
+         (lisp-mode . aggressive-indent-mode)))
 ;;@@ APHELEIA 保存时自动格式化，不移动光标
 (use-package apheleia
   :hook (prog-mode . apheleia-mode)
   :config
+  ;; Lisp 的缩进交给 aggressive-indent 编辑时增量处理，
+  ;; 避免保存时对整文件跑 indent-region。
+  (setf (alist-get 'emacs-lisp-mode apheleia-mode-alist) nil)
+  (setf (alist-get 'lisp-mode apheleia-mode-alist) nil)
+  (setf (alist-get 'common-lisp-mode apheleia-mode-alist) nil)
   ;; Python 优先使用 ruff（更快），不可用时回退到 black
   (setf (alist-get 'python-mode apheleia-mode-alist)
         (if (executable-find "ruff") '(ruff-isort ruff) 'black))
@@ -4085,9 +3962,6 @@ corfu 的 `corfu-quit-at-boundary' 便没有可退出的时机，弹窗在空格
   (setf (alist-get 'typescript-ts-mode apheleia-mode-alist) 'prettier)
   (setf (alist-get 'tsx-ts-mode apheleia-mode-alist) 'prettier)
   (setf (alist-get 'json-ts-mode apheleia-mode-alist) 'prettier))
-;;@@ highlight-quoted
-(use-package highlight-quoted
-  :hook (emacs-lisp-mode . highlight-quoted-mode))
 ;;@@ project-x
 (use-package project-x
   :after project
@@ -4173,25 +4047,6 @@ ORIG 为原函数，ITEM 为 session 中的 buffer 条目。"
               #'clw/project-x--restore-buffer-safe)
   (project-x-mode 1)
   )
-;;@@P-SEARCH 检索工具
-(use-package p-search
-  :defer t
-  :config
-  ;; p-search--rx-to-string 是 p-search 私有 API
-  (clw/check-private-advice 'p-search--rx-to-string '(2 . 2)
-                            "p-search--rx-to-string 直接调用")
-  (defun clw/p-search-query--command (fun term cmd)
-    (let* ((term-str (p-search--rx-to-string term cmd))
-           (case-insensitive-p
-            (get-text-property 0 'p-search-case-insensitive term-str)))
-      (if (eq cmd :grep)
-          `(,grep-program "-r" "-c" ,@(and case-insensitive-p '("--ignore-case"))
-                          ,term-str ".")
-        (funcall fun term cmd))))
-  (clw/check-private-advice 'p-search-query--command '(2 . 2)
-                            "p-search-query--command :around")
-  (advice-add 'p-search-query--command
-              :around #'clw/p-search-query--command))
 
 ;;@@WGREP grep 结果缓冲区直接编辑替换，改完自动写回文件
 (use-package wgrep
@@ -4227,10 +4082,6 @@ ORIG 为原函数，ITEM 为 session 中的 buffer 条目。"
         org-appear-autoentities t
         org-appear-autokeywords t
         org-appear-delay 0.3))
-
-;;@@TOC-ORG 自动维护 :TOC: 目录，适合 README
-(use-package toc-org
-  :hook (org-mode . toc-org-mode))
 
 ;;@@DIRED-HIST dired 目录历史 l/r 前进后退（对齐 help/info/eww 惯例）
 ;; 接管 dired 原有的 l (dired-do-redisplay) 与 r (wdired) 两键
